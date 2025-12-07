@@ -54,3 +54,26 @@ htmlcov/
 *.temp
 temp/
 tmp/
+
+# Android Studio
+.idea/
+*.iml
+.gradle/
+build/
+local.properties
+
+# Android
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+bin/
+gen/
+out/
+release/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
