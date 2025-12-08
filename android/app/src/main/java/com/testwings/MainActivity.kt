@@ -24,8 +24,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -117,12 +122,12 @@ class MainActivity : ComponentActivity() {
         
         // 检查服务是否运行
         if (isServiceRunning()) {
-            // 服务已运行，等待更长时间确保系统识别到服务
+            // 服务已运行，优化：减少延迟时间
             Handler(Looper.getMainLooper()).postDelayed({
                 try {
                     // 再次确保服务运行
                     ensureServiceRunning()
-                    // 再等待一下让系统完全识别服务
+                    // 优化：减少等待时间，从 1 秒减少到 300ms
                     Handler(Looper.getMainLooper()).postDelayed({
                         try {
                             mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
@@ -132,23 +137,23 @@ class MainActivity : ComponentActivity() {
                             if (retryCount < 10) {
                                 Handler(Looper.getMainLooper()).postDelayed({
                                     waitForServiceAndStart(resultCode, data, retryCount + 1)
-                                }, 1000) // 增加延迟到 1 秒
+                                }, 500) // 从 1 秒减少到 500ms
                             } else {
                                 Toast.makeText(this, "需要前台服务才能捕获屏幕，请检查通知权限", Toast.LENGTH_LONG).show()
                                 e.printStackTrace()
                             }
                         }
-                    }, 1000) // 等待 1 秒让系统识别服务
+                    }, 300) // 从 1 秒减少到 300ms
                 } catch (e: Exception) {
                     Toast.makeText(this, "启动失败: ${e.message}", Toast.LENGTH_LONG).show()
                     e.printStackTrace()
                 }
-            }, 500)
+            }, 200) // 从 500ms 减少到 200ms
         } else {
             // 服务未运行，继续等待
             Handler(Looper.getMainLooper()).postDelayed({
                 waitForServiceAndStart(resultCode, data, retryCount + 1)
-            }, 500)
+            }, 300) // 从 500ms 减少到 300ms
         }
     }
     
@@ -183,7 +188,15 @@ class MainActivity : ComponentActivity() {
         }
         
         // HarmonyOS 和 Android 14+ 都需要前台服务，为了兼容性，无论版本如何都启动
-        // 先启动服务并等待完全启动
+        // 检查服务是否已经在运行
+        if (isServiceRunning()) {
+            // 服务已在运行，立即显示授权弹窗（无需等待）
+            val intent = mediaProjectionManager.createScreenCaptureIntent()
+            screenCaptureLauncher.launch(intent)
+            return
+        }
+        
+        // 服务未运行，先启动服务
         val serviceIntent = Intent(applicationContext, ScreenCaptureService::class.java)
         try {
             // 使用 ContextCompat.startForegroundService 更可靠
@@ -193,15 +206,15 @@ class MainActivity : ComponentActivity() {
             applicationContext.startService(serviceIntent)
         }
         
-        // 等待服务完全启动后再请求权限（给服务足够时间启动并显示通知）
+        // 优化：减少延迟时间，前台服务启动通常很快（onCreate 中立即调用 startForeground）
         Handler(Looper.getMainLooper()).postDelayed({
             // 检查服务是否运行
             if (isServiceRunning()) {
-                // 服务已运行，再等待一下确保系统识别到服务
+                // 服务已运行，短暂等待确保系统识别到服务（减少延迟）
                 Handler(Looper.getMainLooper()).postDelayed({
                     val intent = mediaProjectionManager.createScreenCaptureIntent()
                     screenCaptureLauncher.launch(intent)
-                }, 1500) // 再等待 1.5 秒
+                }, 200) // 从 1.5 秒减少到 200ms
             } else {
                 // 服务未运行，提示用户
                 Toast.makeText(this, "前台服务启动失败，请检查通知权限", Toast.LENGTH_LONG).show()
@@ -209,7 +222,7 @@ class MainActivity : ComponentActivity() {
                 val intent = mediaProjectionManager.createScreenCaptureIntent()
                 screenCaptureLauncher.launch(intent)
             }
-        }, 2000) // 等待 2 秒让服务完全启动
+        }, 300) // 从 2 秒减少到 300ms
     }
     
     private fun captureScreen() {
@@ -330,7 +343,43 @@ fun MainScreen(
         }
     }
     
+    // 使用 HorizontalPager 实现三页布局（左页、主页、右页）
+    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
+    
+    // 监听页面切换，用于验证滑动操作
+    val currentPage = pagerState.currentPage
+    
+    HorizontalPager(
+        state = pagerState,
+        modifier = Modifier.fillMaxSize()
+    ) { page ->
+        when (page) {
+            0 -> LeftPage()  // 左侧空白页
+            1 -> MainContentPage(  // 主页面（当前内容）
+                onCaptureClick = onCaptureClick,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                isAccessibilityEnabled = isAccessibilityEnabled,
+                pagerState = pagerState
+            )
+            2 -> RightPage()  // 右侧空白页
+        }
+    }
+}
+
+/**
+ * 主内容页面
+ */
+@Composable
+fun MainContentPage(
+    onCaptureClick: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    isAccessibilityEnabled: Boolean,
+    pagerState: PagerState
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scrollState = rememberScrollState()
+    val currentPage = pagerState.currentPage
+    val totalPages = 3
     
     Column(
         modifier = Modifier
@@ -339,6 +388,50 @@ fun MainScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 页面位置指示
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "页面位置",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (i in 0 until totalPages) {
+                        Box(
+                            modifier = Modifier
+                                .size(if (i == currentPage) 12.dp else 8.dp)
+                                .background(
+                                    color = if (i == currentPage) 
+                                        MaterialTheme.colorScheme.primary 
+                                    else 
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                    shape = CircleShape
+                                )
+                        )
+                    }
+                }
+                Text(
+                    text = "${currentPage + 1}/$totalPages",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+        
         Text(
             text = "TestWings - 自动化测试",
             style = MaterialTheme.typography.headlineMedium
@@ -400,7 +493,68 @@ fun MainScreen(
         
         // 操作测试功能（需要无障碍服务）
         if (isAccessibilityEnabled) {
-            OperationTestSection(context = context)
+            OperationTestSection(
+                context = context,
+                pagerState = pagerState
+            )
+        }
+    }
+}
+
+/**
+ * 左侧空白页面（用于测试向右滑动）
+ */
+@Composable
+fun LeftPage() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "← 左侧页面",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "向左滑动可以返回主页面",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * 右侧空白页面（用于测试向左滑动）
+ */
+@Composable
+fun RightPage() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "右侧页面 →",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "向右滑动可以返回主页面",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -468,15 +622,19 @@ fun ScreenCaptureScreen(
  * 操作测试区域
  */
 @Composable
-fun OperationTestSection(context: Context) {
+fun OperationTestSection(
+    context: Context,
+    pagerState: PagerState
+) {
     var clickCount by remember { mutableStateOf(0) }
     var swipeUpCount by remember { mutableStateOf(0) }
     var swipeDownCount by remember { mutableStateOf(0) }
     var swipeLeftCount by remember { mutableStateOf(0) }
     var swipeRightCount by remember { mutableStateOf(0) }
     var lastOperation by remember { mutableStateOf<String?>(null) }
-    var countdown by remember { mutableStateOf(0) }
-    var isDelayedMode by remember { mutableStateOf(false) }
+    
+    // 记录滑动前的页面位置，用于验证滑动操作
+    val pageBeforeSwipe = remember { mutableStateOf(pagerState.currentPage) }
     
     // 获取屏幕尺寸
     val displayMetrics = context.resources.displayMetrics
@@ -484,47 +642,6 @@ fun OperationTestSection(context: Context) {
     val screenHeight = displayMetrics.heightPixels
     val centerX = screenWidth / 2
     val centerY = screenHeight / 2
-    
-    // 延迟执行协程
-    LaunchedEffect(countdown) {
-        if (countdown > 0) {
-            delay(1000)
-            countdown--
-        } else if (countdown == 0 && isDelayedMode) {
-            isDelayedMode = false
-        }
-    }
-    
-    // 执行延迟操作
-    fun executeWithDelay(action: () -> Unit, operationName: String) {
-        if (isDelayedMode) {
-            android.widget.Toast.makeText(
-                context,
-                "上一个操作还在倒计时中，请稍候",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-        
-        isDelayedMode = true
-        countdown = 3
-        
-        // 启动倒计时
-        CoroutineScope(Dispatchers.Main).launch {
-            for (i in 3 downTo 1) {
-                countdown = i
-                android.widget.Toast.makeText(
-                    context,
-                    "$operationName 将在 $i 秒后执行，请切换到目标应用",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-                delay(1000)
-            }
-            countdown = 0
-            action()
-            isDelayedMode = false
-        }
-    }
     
     Card(
         modifier = Modifier.fillMaxWidth()
@@ -540,27 +657,10 @@ fun OperationTestSection(context: Context) {
             
             // 操作说明
             Text(
-                text = "💡 提示：点击滑动按钮后，有3秒倒计时，请在这3秒内切换到目标应用（如设置、浏览器），操作会在倒计时结束后执行。",
+                text = "💡 提示：操作会立即执行，在当前页面即可看到效果。上下滑动可以滚动当前页面，左右滑动可以切换页面。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            
-            // 倒计时显示
-            if (countdown > 0) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "⏰ 倒计时: $countdown 秒后执行操作",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
             
             // 最后操作显示
             if (lastOperation != null) {
@@ -654,23 +754,20 @@ fun OperationTestSection(context: Context) {
                     ) {
                         Button(
                             onClick = {
-                                executeWithDelay({
-                                    val result = DeviceController.swipeUp()
-                                    swipeUpCount++
-                                    lastOperation = if (result) {
-                                        "向上滑动 - 成功 (第 $swipeUpCount 次)"
-                                    } else {
-                                        "向上滑动 - 失败"
-                                    }
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        if (result) "✅ 向上滑动已执行！" else "❌ 滑动失败",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }, "向上滑动")
+                                val result = DeviceController.swipeUp()
+                                swipeUpCount++
+                                lastOperation = if (result) {
+                                    "向上滑动 - 成功 (第 $swipeUpCount 次)"
+                                } else {
+                                    "向上滑动 - 失败"
+                                }
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (result) "✅ 向上滑动已执行！" else "❌ 滑动失败",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
                             },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isDelayedMode
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text("向上滑动")
                         }
@@ -687,23 +784,20 @@ fun OperationTestSection(context: Context) {
                     ) {
                         Button(
                             onClick = {
-                                executeWithDelay({
-                                    val result = DeviceController.swipeDown()
-                                    swipeDownCount++
-                                    lastOperation = if (result) {
-                                        "向下滑动 - 成功 (第 $swipeDownCount 次)"
-                                    } else {
-                                        "向下滑动 - 失败"
-                                    }
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        if (result) "✅ 向下滑动已执行！" else "❌ 滑动失败",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }, "向下滑动")
+                                val result = DeviceController.swipeDown()
+                                swipeDownCount++
+                                lastOperation = if (result) {
+                                    "向下滑动 - 成功 (第 $swipeDownCount 次)"
+                                } else {
+                                    "向下滑动 - 失败"
+                                }
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (result) "✅ 向下滑动已执行！" else "❌ 滑动失败",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
                             },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isDelayedMode
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text("向下滑动")
                         }
@@ -721,23 +815,40 @@ fun OperationTestSection(context: Context) {
                     ) {
                         Button(
                             onClick = {
-                                executeWithDelay({
-                                    val result = DeviceController.swipeLeft()
-                                    swipeLeftCount++
-                                    lastOperation = if (result) {
-                                        "向左滑动 - 成功 (第 $swipeLeftCount 次)"
+                                // 记录滑动前的页面位置
+                                pageBeforeSwipe.value = pagerState.currentPage
+                                val result = DeviceController.swipeLeft()
+                                swipeLeftCount++
+                                // 延迟检查页面是否切换（给滑动操作时间执行）
+                                CoroutineScope(Dispatchers.Main).launch {
+                                    delay(300) // 等待300ms让滑动操作完成
+                                    val newPage = pagerState.currentPage
+                                    if (newPage > pageBeforeSwipe.value) {
+                                        // 页面向右切换了（从主页切换到右侧页），说明向左滑动成功
+                                        lastOperation = "向左滑动 - 成功 (第 $swipeLeftCount 次) - 页面已切换"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "✅ 向左滑动成功！页面已切换",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else if (result) {
+                                        lastOperation = "向左滑动 - 已执行 (第 $swipeLeftCount 次)"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "✅ 向左滑动已执行！",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     } else {
-                                        "向左滑动 - 失败"
+                                        lastOperation = "向左滑动 - 失败"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "❌ 滑动失败",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     }
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        if (result) "✅ 向左滑动已执行！" else "❌ 滑动失败",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }, "向左滑动")
+                                }
                             },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isDelayedMode
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text("向左滑动")
                         }
@@ -754,23 +865,40 @@ fun OperationTestSection(context: Context) {
                     ) {
                         Button(
                             onClick = {
-                                executeWithDelay({
-                                    val result = DeviceController.swipeRight()
-                                    swipeRightCount++
-                                    lastOperation = if (result) {
-                                        "向右滑动 - 成功 (第 $swipeRightCount 次)"
+                                // 记录滑动前的页面位置
+                                pageBeforeSwipe.value = pagerState.currentPage
+                                val result = DeviceController.swipeRight()
+                                swipeRightCount++
+                                // 延迟检查页面是否切换（给滑动操作时间执行）
+                                CoroutineScope(Dispatchers.Main).launch {
+                                    delay(300) // 等待300ms让滑动操作完成
+                                    val newPage = pagerState.currentPage
+                                    if (newPage < pageBeforeSwipe.value) {
+                                        // 页面向左切换了（从主页切换到左侧页），说明向右滑动成功
+                                        lastOperation = "向右滑动 - 成功 (第 $swipeRightCount 次) - 页面已切换"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "✅ 向右滑动成功！页面已切换",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else if (result) {
+                                        lastOperation = "向右滑动 - 已执行 (第 $swipeRightCount 次)"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "✅ 向右滑动已执行！",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     } else {
-                                        "向右滑动 - 失败"
+                                        lastOperation = "向右滑动 - 失败"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "❌ 滑动失败",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     }
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        if (result) "✅ 向右滑动已执行！" else "❌ 滑动失败",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }, "向右滑动")
+                                }
                             },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isDelayedMode
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text("向右滑动")
                         }
