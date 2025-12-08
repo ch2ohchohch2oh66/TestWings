@@ -1,5 +1,6 @@
 package com.testwings.utils
 
+import android.content.Context
 import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import com.testwings.service.TestWingsAccessibilityService
@@ -15,9 +16,10 @@ object DeviceController {
     
     /**
      * 检查无障碍服务是否已启用
+     * @param context 上下文，用于系统API检查（可选，但建议传入以提高准确性）
      */
-    fun isAccessibilityServiceEnabled(): Boolean {
-        return TestWingsAccessibilityService.isServiceEnabled()
+    fun isAccessibilityServiceEnabled(context: Context? = null): Boolean {
+        return TestWingsAccessibilityService.isServiceEnabled(context)
     }
     
     /**

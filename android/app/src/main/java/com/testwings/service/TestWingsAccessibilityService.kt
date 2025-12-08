@@ -2,8 +2,10 @@ package com.testwings.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Context
 import android.graphics.Path
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -18,6 +20,9 @@ class TestWingsAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "TestWingsAccessibility"
         
+        // 服务的完整类名，用于系统API检查
+        private const val SERVICE_NAME = "com.testwings.service.TestWingsAccessibilityService"
+        
         // 单例引用，用于外部调用
         @Volatile
         private var instance: TestWingsAccessibilityService? = null
@@ -28,9 +33,44 @@ class TestWingsAccessibilityService : AccessibilityService() {
         fun getInstance(): TestWingsAccessibilityService? = instance
         
         /**
-         * 检查服务是否已启动
+         * 检查服务是否已启用（使用系统API检查，不依赖服务实例）
+         * 这样可以正确检测到服务在系统设置中的启用状态，即使服务实例还未创建
          */
-        fun isServiceEnabled(): Boolean = instance != null
+        fun isServiceEnabled(context: Context? = null): Boolean {
+            // 如果服务实例存在，说明服务已启动并连接
+            if (instance != null) {
+                return true
+            }
+            
+            // 如果没有传入context，无法使用系统API检查，返回false
+            val ctx = context ?: return false
+            
+            // 使用系统API检查服务是否在系统设置中被启用
+            return try {
+                val accessibilityEnabled = Settings.Secure.getInt(
+                    ctx.contentResolver,
+                    Settings.Secure.ACCESSIBILITY_ENABLED,
+                    0
+                ) == 1
+                
+                if (!accessibilityEnabled) {
+                    Log.d(TAG, "无障碍服务总开关未启用")
+                    return false
+                }
+                
+                val enabledServices = Settings.Secure.getString(
+                    ctx.contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                ) ?: ""
+                
+                val isEnabled = enabledServices.contains(SERVICE_NAME, ignoreCase = true)
+                Log.d(TAG, "无障碍服务在系统设置中${if (isEnabled) "已启用" else "未启用"}")
+                isEnabled
+            } catch (e: Exception) {
+                Log.e(TAG, "检查无障碍服务状态失败", e)
+                false
+            }
+        }
     }
     
     override fun onServiceConnected() {

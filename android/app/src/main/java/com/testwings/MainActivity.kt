@@ -314,6 +314,13 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    override fun onResume() {
+        super.onResume()
+        // 当Activity恢复时（例如从设置页面返回），刷新无障碍服务状态
+        // 这会触发Compose重新检查状态
+        // 注意：这里不需要手动刷新，因为MainScreen中的LaunchedEffect会在Activity恢复时重新执行
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         virtualDisplay?.release()
@@ -330,16 +337,29 @@ fun MainScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
     
-    // 检查无障碍服务状态
-    LaunchedEffect(Unit) {
-        isAccessibilityEnabled = DeviceController.isAccessibilityServiceEnabled()
+    // 将操作计数状态提升到 MainScreen，避免页面切换时丢失
+    var clickCount by remember { mutableStateOf(0) }
+    var swipeUpCount by remember { mutableStateOf(0) }
+    var swipeDownCount by remember { mutableStateOf(0) }
+    var swipeLeftCount by remember { mutableStateOf(0) }
+    var swipeRightCount by remember { mutableStateOf(0) }
+    var lastOperation by remember { mutableStateOf<String?>(null) }
+    
+    // 刷新无障碍服务状态的函数
+    val refreshAccessibilityStatus: () -> Unit = {
+        isAccessibilityEnabled = DeviceController.isAccessibilityServiceEnabled(context)
     }
     
-    // 定期检查服务状态
+    // 检查无障碍服务状态（传入context以提高准确性）
+    LaunchedEffect(Unit) {
+        isAccessibilityEnabled = DeviceController.isAccessibilityServiceEnabled(context)
+    }
+    
+    // 定期检查服务状态（传入context以提高准确性）
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(1000)
-            isAccessibilityEnabled = DeviceController.isAccessibilityServiceEnabled()
+            isAccessibilityEnabled = DeviceController.isAccessibilityServiceEnabled(context)
         }
     }
     
@@ -359,7 +379,20 @@ fun MainScreen(
                 onCaptureClick = onCaptureClick,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 isAccessibilityEnabled = isAccessibilityEnabled,
-                pagerState = pagerState
+                onRefreshAccessibilityStatus = refreshAccessibilityStatus,
+                pagerState = pagerState,
+                clickCount = clickCount,
+                swipeUpCount = swipeUpCount,
+                swipeDownCount = swipeDownCount,
+                swipeLeftCount = swipeLeftCount,
+                swipeRightCount = swipeRightCount,
+                lastOperation = lastOperation,
+                onClickCountChange = { clickCount = it },
+                onSwipeUpCountChange = { swipeUpCount = it },
+                onSwipeDownCountChange = { swipeDownCount = it },
+                onSwipeLeftCountChange = { swipeLeftCount = it },
+                onSwipeRightCountChange = { swipeRightCount = it },
+                onLastOperationChange = { lastOperation = it }
             )
             2 -> RightPage()  // 右侧空白页
         }
@@ -374,7 +407,20 @@ fun MainContentPage(
     onCaptureClick: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     isAccessibilityEnabled: Boolean,
-    pagerState: PagerState
+    onRefreshAccessibilityStatus: () -> Unit,
+    pagerState: PagerState,
+    clickCount: Int,
+    swipeUpCount: Int,
+    swipeDownCount: Int,
+    swipeLeftCount: Int,
+    swipeRightCount: Int,
+    lastOperation: String?,
+    onClickCountChange: (Int) -> Unit,
+    onSwipeUpCountChange: (Int) -> Unit,
+    onSwipeDownCountChange: (Int) -> Unit,
+    onSwipeLeftCountChange: (Int) -> Unit,
+    onSwipeRightCountChange: (Int) -> Unit,
+    onLastOperationChange: (String?) -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scrollState = rememberScrollState()
@@ -451,10 +497,29 @@ fun MainContentPage(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = "无障碍服务状态",
-                    style = MaterialTheme.typography.titleMedium
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "无障碍服务状态",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    // 刷新按钮
+                    TextButton(
+                        onClick = {
+                            onRefreshAccessibilityStatus()
+                            android.widget.Toast.makeText(
+                                context,
+                                "已刷新状态",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    ) {
+                        Text("🔄 刷新")
+                    }
+                }
                 Text(
                     text = if (isAccessibilityEnabled) "✅ 已启用" else "❌ 未启用",
                     style = MaterialTheme.typography.bodyMedium
@@ -495,7 +560,19 @@ fun MainContentPage(
         if (isAccessibilityEnabled) {
             OperationTestSection(
                 context = context,
-                pagerState = pagerState
+                pagerState = pagerState,
+                clickCount = clickCount,
+                swipeUpCount = swipeUpCount,
+                swipeDownCount = swipeDownCount,
+                swipeLeftCount = swipeLeftCount,
+                swipeRightCount = swipeRightCount,
+                lastOperation = lastOperation,
+                onClickCountChange = onClickCountChange,
+                onSwipeUpCountChange = onSwipeUpCountChange,
+                onSwipeDownCountChange = onSwipeDownCountChange,
+                onSwipeLeftCountChange = onSwipeLeftCountChange,
+                onSwipeRightCountChange = onSwipeRightCountChange,
+                onLastOperationChange = onLastOperationChange
             )
         }
     }
@@ -624,15 +701,20 @@ fun ScreenCaptureScreen(
 @Composable
 fun OperationTestSection(
     context: Context,
-    pagerState: PagerState
+    pagerState: PagerState,
+    clickCount: Int,
+    swipeUpCount: Int,
+    swipeDownCount: Int,
+    swipeLeftCount: Int,
+    swipeRightCount: Int,
+    lastOperation: String?,
+    onClickCountChange: (Int) -> Unit,
+    onSwipeUpCountChange: (Int) -> Unit,
+    onSwipeDownCountChange: (Int) -> Unit,
+    onSwipeLeftCountChange: (Int) -> Unit,
+    onSwipeRightCountChange: (Int) -> Unit,
+    onLastOperationChange: (String?) -> Unit
 ) {
-    var clickCount by remember { mutableStateOf(0) }
-    var swipeUpCount by remember { mutableStateOf(0) }
-    var swipeDownCount by remember { mutableStateOf(0) }
-    var swipeLeftCount by remember { mutableStateOf(0) }
-    var swipeRightCount by remember { mutableStateOf(0) }
-    var lastOperation by remember { mutableStateOf<String?>(null) }
-    
     // 记录滑动前的页面位置，用于验证滑动操作
     val pageBeforeSwipe = remember { mutableStateOf(pagerState.currentPage) }
     
@@ -701,12 +783,13 @@ fun OperationTestSection(
                         Button(
                             onClick = {
                                 val result = DeviceController.click(centerX, centerY)
-                                clickCount++
-                                lastOperation = if (result) {
-                                    "点击屏幕中心 ($centerX, $centerY) - 成功 (第 $clickCount 次)"
+                                val newCount = clickCount + 1
+                                onClickCountChange(newCount)
+                                onLastOperationChange(if (result) {
+                                    "点击屏幕中心 ($centerX, $centerY) - 成功 (第 $newCount 次)"
                                 } else {
                                     "点击屏幕中心 ($centerX, $centerY) - 失败"
-                                }
+                                })
                                 android.widget.Toast.makeText(
                                     context,
                                     if (result) "✅ 点击成功！" else "❌ 点击失败",
@@ -755,12 +838,13 @@ fun OperationTestSection(
                         Button(
                             onClick = {
                                 val result = DeviceController.swipeUp()
-                                swipeUpCount++
-                                lastOperation = if (result) {
-                                    "向上滑动 - 成功 (第 $swipeUpCount 次)"
+                                val newCount = swipeUpCount + 1
+                                onSwipeUpCountChange(newCount)
+                                onLastOperationChange(if (result) {
+                                    "向上滑动 - 成功 (第 $newCount 次)"
                                 } else {
                                     "向上滑动 - 失败"
-                                }
+                                })
                                 android.widget.Toast.makeText(
                                     context,
                                     if (result) "✅ 向上滑动已执行！" else "❌ 滑动失败",
@@ -785,12 +869,13 @@ fun OperationTestSection(
                         Button(
                             onClick = {
                                 val result = DeviceController.swipeDown()
-                                swipeDownCount++
-                                lastOperation = if (result) {
-                                    "向下滑动 - 成功 (第 $swipeDownCount 次)"
+                                val newCount = swipeDownCount + 1
+                                onSwipeDownCountChange(newCount)
+                                onLastOperationChange(if (result) {
+                                    "向下滑动 - 成功 (第 $newCount 次)"
                                 } else {
                                     "向下滑动 - 失败"
-                                }
+                                })
                                 android.widget.Toast.makeText(
                                     context,
                                     if (result) "✅ 向下滑动已执行！" else "❌ 滑动失败",
@@ -818,28 +903,29 @@ fun OperationTestSection(
                                 // 记录滑动前的页面位置
                                 pageBeforeSwipe.value = pagerState.currentPage
                                 val result = DeviceController.swipeLeft()
-                                swipeLeftCount++
+                                val newCount = swipeLeftCount + 1
+                                onSwipeLeftCountChange(newCount)
                                 // 延迟检查页面是否切换（给滑动操作时间执行）
                                 CoroutineScope(Dispatchers.Main).launch {
                                     delay(300) // 等待300ms让滑动操作完成
                                     val newPage = pagerState.currentPage
                                     if (newPage > pageBeforeSwipe.value) {
                                         // 页面向右切换了（从主页切换到右侧页），说明向左滑动成功
-                                        lastOperation = "向左滑动 - 成功 (第 $swipeLeftCount 次) - 页面已切换"
+                                        onLastOperationChange("向左滑动 - 成功 (第 $newCount 次) - 页面已切换")
                                         android.widget.Toast.makeText(
                                             context,
                                             "✅ 向左滑动成功！页面已切换",
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
                                     } else if (result) {
-                                        lastOperation = "向左滑动 - 已执行 (第 $swipeLeftCount 次)"
+                                        onLastOperationChange("向左滑动 - 已执行 (第 $newCount 次)")
                                         android.widget.Toast.makeText(
                                             context,
                                             "✅ 向左滑动已执行！",
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
                                     } else {
-                                        lastOperation = "向左滑动 - 失败"
+                                        onLastOperationChange("向左滑动 - 失败")
                                         android.widget.Toast.makeText(
                                             context,
                                             "❌ 滑动失败",
@@ -868,28 +954,29 @@ fun OperationTestSection(
                                 // 记录滑动前的页面位置
                                 pageBeforeSwipe.value = pagerState.currentPage
                                 val result = DeviceController.swipeRight()
-                                swipeRightCount++
+                                val newCount = swipeRightCount + 1
+                                onSwipeRightCountChange(newCount)
                                 // 延迟检查页面是否切换（给滑动操作时间执行）
                                 CoroutineScope(Dispatchers.Main).launch {
                                     delay(300) // 等待300ms让滑动操作完成
                                     val newPage = pagerState.currentPage
                                     if (newPage < pageBeforeSwipe.value) {
                                         // 页面向左切换了（从主页切换到左侧页），说明向右滑动成功
-                                        lastOperation = "向右滑动 - 成功 (第 $swipeRightCount 次) - 页面已切换"
+                                        onLastOperationChange("向右滑动 - 成功 (第 $newCount 次) - 页面已切换")
                                         android.widget.Toast.makeText(
                                             context,
                                             "✅ 向右滑动成功！页面已切换",
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
                                     } else if (result) {
-                                        lastOperation = "向右滑动 - 已执行 (第 $swipeRightCount 次)"
+                                        onLastOperationChange("向右滑动 - 已执行 (第 $newCount 次)")
                                         android.widget.Toast.makeText(
                                             context,
                                             "✅ 向右滑动已执行！",
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
                                     } else {
-                                        lastOperation = "向右滑动 - 失败"
+                                        onLastOperationChange("向右滑动 - 失败")
                                         android.widget.Toast.makeText(
                                             context,
                                             "❌ 滑动失败",
@@ -928,11 +1015,11 @@ fun OperationTestSection(
                     Button(
                         onClick = {
                             val result = DeviceController.pressBack()
-                            lastOperation = if (result) {
+                            onLastOperationChange(if (result) {
                                 "返回键 - 成功"
                             } else {
                                 "返回键 - 失败"
-                            }
+                            })
                             android.widget.Toast.makeText(
                                 context,
                                 if (result) "✅ 返回键成功！" else "❌ 返回键失败",
