@@ -1,0 +1,314 @@
+package com.testwings.service
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.os.Build
+import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.annotation.RequiresApi
+
+/**
+ * TestWings 无障碍服务
+ * 用于获取 UI 元素信息和执行操作（点击、输入、滑动等）
+ */
+class TestWingsAccessibilityService : AccessibilityService() {
+    
+    companion object {
+        private const val TAG = "TestWingsAccessibility"
+        
+        // 单例引用，用于外部调用
+        @Volatile
+        private var instance: TestWingsAccessibilityService? = null
+        
+        /**
+         * 获取服务实例（如果服务已启动）
+         */
+        fun getInstance(): TestWingsAccessibilityService? = instance
+        
+        /**
+         * 检查服务是否已启动
+         */
+        fun isServiceEnabled(): Boolean = instance != null
+    }
+    
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        Log.d(TAG, "TestWings AccessibilityService 已启动")
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        instance = null
+        Log.d(TAG, "TestWings AccessibilityService 已停止")
+    }
+    
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // 可以在这里监听 UI 变化事件
+        // 暂时不需要处理，后续可以用于监听页面变化
+    }
+    
+    override fun onInterrupt() {
+        Log.w(TAG, "AccessibilityService 被中断")
+    }
+    
+    /**
+     * 获取根节点（当前屏幕的 UI 树根节点）
+     */
+    fun getRootNode(): AccessibilityNodeInfo? {
+        return rootInActiveWindow
+    }
+    
+    /**
+     * 根据文本查找节点
+     */
+    fun findNodeByText(text: String): AccessibilityNodeInfo? {
+        val rootNode = getRootNode() ?: return null
+        return findNodeByTextRecursive(rootNode, text)
+    }
+    
+    /**
+     * 递归查找节点
+     */
+    private fun findNodeByTextRecursive(
+        node: AccessibilityNodeInfo,
+        text: String
+    ): AccessibilityNodeInfo? {
+        // 检查当前节点
+        if (node.text?.toString()?.contains(text, ignoreCase = true) == true) {
+            return node
+        }
+        if (node.contentDescription?.toString()?.contains(text, ignoreCase = true) == true) {
+            return node
+        }
+        
+        // 递归查找子节点
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findNodeByTextRecursive(child, text)
+            if (found != null) {
+                return found
+            }
+            child.recycle()
+        }
+        
+        return null
+    }
+    
+    /**
+     * 根据资源 ID 查找节点
+     */
+    fun findNodeByResourceId(resourceId: String): AccessibilityNodeInfo? {
+        val rootNode = getRootNode() ?: return null
+        return findNodeByResourceIdRecursive(rootNode, resourceId)
+    }
+    
+    private fun findNodeByResourceIdRecursive(
+        node: AccessibilityNodeInfo,
+        resourceId: String
+    ): AccessibilityNodeInfo? {
+        if (node.viewIdResourceName == resourceId) {
+            return node
+        }
+        
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findNodeByResourceIdRecursive(child, resourceId)
+            if (found != null) {
+                return found
+            }
+            child.recycle()
+        }
+        
+        return null
+    }
+    
+    /**
+     * 点击节点
+     */
+    fun clickNode(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            if (node.isClickable) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } else {
+                // 如果节点不可点击，尝试点击父节点
+                val parent = node.parent
+                if (parent != null && parent.isClickable) {
+                    val result = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    parent.recycle()
+                    result
+                } else {
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "点击节点失败", e)
+            false
+        }
+    }
+    
+    /**
+     * 根据坐标点击
+     */
+    @RequiresApi(Build.VERSION_CODES.N)
+    fun clickAt(x: Int, y: Int): Boolean {
+        val path = Path().apply {
+            moveTo(x.toFloat(), y.toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
+            .build()
+        
+        return dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                super.onCompleted(gestureDescription)
+                Log.d(TAG, "点击完成: ($x, $y)")
+            }
+            
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                super.onCancelled(gestureDescription)
+                Log.w(TAG, "点击取消: ($x, $y)")
+            }
+        }, null)
+    }
+    
+    /**
+     * 输入文本
+     */
+    fun inputText(node: AccessibilityNodeInfo, text: String): Boolean {
+        return try {
+            val arguments = android.os.Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        } catch (e: Exception) {
+            Log.e(TAG, "输入文本失败", e)
+            false
+        }
+    }
+    
+    /**
+     * 清空输入框
+     */
+    fun clearText(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            val arguments = android.os.Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        } catch (e: Exception) {
+            Log.e(TAG, "清空文本失败", e)
+            false
+        }
+    }
+    
+    /**
+     * 滑动
+     */
+    @RequiresApi(Build.VERSION_CODES.N)
+    fun swipe(
+        startX: Int, startY: Int,
+        endX: Int, endY: Int,
+        duration: Long = 300
+    ): Boolean {
+        val path = Path().apply {
+            moveTo(startX.toFloat(), startY.toFloat())
+            lineTo(endX.toFloat(), endY.toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
+            .build()
+        
+        return dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                super.onCompleted(gestureDescription)
+                Log.d(TAG, "滑动完成: ($startX, $startY) -> ($endX, $endY)")
+            }
+            
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                super.onCancelled(gestureDescription)
+                Log.w(TAG, "滑动取消: ($startX, $startY) -> ($endX, $endY)")
+            }
+        }, null)
+    }
+    
+    /**
+     * 向上滑动
+     */
+    @RequiresApi(Build.VERSION_CODES.N)
+    fun swipeUp(distance: Int = 800): Boolean {
+        val displayMetrics = resources.displayMetrics
+        val centerX = displayMetrics.widthPixels / 2
+        // 从屏幕下方开始，向上滑动
+        val startY = (displayMetrics.heightPixels * 0.8).toInt()  // 屏幕80%位置
+        val endY = (displayMetrics.heightPixels * 0.2).toInt()    // 屏幕20%位置
+        Log.d(TAG, "向上滑动: 从 ($centerX, $startY) 到 ($centerX, $endY)")
+        return swipe(centerX, startY, centerX, endY, 500)  // 增加持续时间到500ms
+    }
+    
+    /**
+     * 向下滑动
+     */
+    @RequiresApi(Build.VERSION_CODES.N)
+    fun swipeDown(distance: Int = 800): Boolean {
+        val displayMetrics = resources.displayMetrics
+        val centerX = displayMetrics.widthPixels / 2
+        // 从屏幕上方开始，向下滑动
+        val startY = (displayMetrics.heightPixels * 0.2).toInt()    // 屏幕20%位置
+        val endY = (displayMetrics.heightPixels * 0.8).toInt()    // 屏幕80%位置
+        Log.d(TAG, "向下滑动: 从 ($centerX, $startY) 到 ($centerX, $endY)")
+        return swipe(centerX, startY, centerX, endY, 500)  // 增加持续时间到500ms
+    }
+    
+    /**
+     * 向左滑动
+     */
+    @RequiresApi(Build.VERSION_CODES.N)
+    fun swipeLeft(distance: Int = 800): Boolean {
+        val displayMetrics = resources.displayMetrics
+        val centerY = displayMetrics.heightPixels / 2
+        // 从屏幕右侧开始，向左滑动
+        val startX = (displayMetrics.widthPixels * 0.8).toInt()    // 屏幕80%位置
+        val endX = (displayMetrics.widthPixels * 0.2).toInt()     // 屏幕20%位置
+        Log.d(TAG, "向左滑动: 从 ($startX, $centerY) 到 ($endX, $centerY)")
+        return swipe(startX, centerY, endX, centerY, 500)  // 增加持续时间到500ms
+    }
+    
+    /**
+     * 向右滑动
+     */
+    @RequiresApi(Build.VERSION_CODES.N)
+    fun swipeRight(distance: Int = 800): Boolean {
+        val displayMetrics = resources.displayMetrics
+        val centerY = displayMetrics.heightPixels / 2
+        // 从屏幕左侧开始，向右滑动
+        val startX = (displayMetrics.widthPixels * 0.2).toInt()   // 屏幕20%位置
+        val endX = (displayMetrics.widthPixels * 0.8).toInt()      // 屏幕80%位置
+        Log.d(TAG, "向右滑动: 从 ($startX, $centerY) 到 ($endX, $centerY)")
+        return swipe(startX, centerY, endX, centerY, 500)  // 增加持续时间到500ms
+    }
+    
+    /**
+     * 返回键
+     */
+    fun pressBack(): Boolean {
+        return performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+    
+    /**
+     * 主页键
+     */
+    fun pressHome(): Boolean {
+        return performGlobalAction(GLOBAL_ACTION_HOME)
+    }
+    
+    /**
+     * 最近任务键
+     */
+    fun pressRecentApps(): Boolean {
+        return performGlobalAction(GLOBAL_ACTION_RECENTS)
+    }
+}
+

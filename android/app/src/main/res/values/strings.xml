@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">TestWings</string>
+    <string name="accessibility_service_description">TestWings 需要无障碍服务权限来执行自动化测试操作，包括点击、输入和滑动等操作。</string>
 </resources>
