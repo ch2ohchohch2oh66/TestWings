@@ -50,6 +50,9 @@ import com.testwings.service.ScreenCaptureService
 import com.testwings.service.TestWingsAccessibilityService
 import com.testwings.ui.theme.TestWingsTheme
 import com.testwings.utils.DeviceController
+import com.testwings.utils.GooglePlayServicesChecker
+import com.testwings.utils.OcrRecognizerFactory
+import com.testwings.utils.OcrResult
 import com.testwings.utils.ScreenCapture
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +61,12 @@ class MainActivity : ComponentActivity() {
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var screenCapture: ScreenCapture? = null
+    private var ocrRecognizer: com.testwings.utils.IOcrRecognizer? = null
+    private val coroutineScope = CoroutineScope(Dispatchers.Main)
+    
+    // OCR结果状态（用于传递给Compose UI）
+    private var ocrResultState: OcrResult? = null
+    private var onOcrResultUpdate: ((OcrResult?) -> Unit)? = null
     
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -107,8 +116,16 @@ class MainActivity : ComponentActivity() {
     
     private fun isServiceRunning(): Boolean {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
-        return runningServices.any { it.service.className == ScreenCaptureService::class.java.name }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Android 8.0+ 使用新的API
+            @Suppress("DEPRECATION")
+            val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
+            runningServices?.any { it.service.className == ScreenCaptureService::class.java.name } ?: false
+        } else {
+            @Suppress("DEPRECATION")
+            val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
+            runningServices.any { it.service.className == ScreenCaptureService::class.java.name }
+        }
     }
     
     private fun waitForServiceAndStart(resultCode: Int, data: android.content.Intent, retryCount: Int) {
@@ -163,12 +180,25 @@ class MainActivity : ComponentActivity() {
         
         mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         screenCapture = ScreenCapture(this)
+        ocrRecognizer = OcrRecognizerFactory.create(this)
         
         setContent {
             TestWingsTheme {
+                var ocrResultState by remember { mutableStateOf<OcrResult?>(null) }
+                
+                // 保存更新函数，供Activity使用
+                onOcrResultUpdate = { result ->
+                    ocrResultState = result
+                }
+                
                 MainScreen(
                     onCaptureClick = { requestScreenCapture() },
-                    onOpenAccessibilitySettings = { openAccessibilitySettings() }
+                    onOpenAccessibilitySettings = { openAccessibilitySettings() },
+                    ocrResult = ocrResultState,
+                    onOcrResultChange = { 
+                        ocrResultState = it
+                        onOcrResultUpdate = null // 清除引用
+                    }
                 )
             }
         }
@@ -228,6 +258,8 @@ class MainActivity : ComponentActivity() {
     private fun captureScreen() {
         val metrics = DisplayMetrics()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ 使用 WindowMetrics（但为了兼容性，仍使用 getRealMetrics）
+            @Suppress("DEPRECATION")
             display?.getRealMetrics(metrics)
         } else {
             @Suppress("DEPRECATION")
@@ -255,8 +287,60 @@ class MainActivity : ComponentActivity() {
                 // 保存截图
                 val filePath = screenCapture?.saveBitmap(bitmap)
                 
-                // 更新 UI（通过 Activity 的方式）
-                runOnUiThread {
+                // 进行OCR识别
+                ocrRecognizer?.let { recognizer ->
+                    Log.d("MainActivity", "开始OCR识别，识别器类型: ${recognizer.javaClass.simpleName}")
+                    coroutineScope.launch {
+                        try {
+                            val ocrResult = recognizer.recognize(bitmap)
+                            
+                            Log.d("MainActivity", "OCR识别完成，结果: isSuccess=${ocrResult.isSuccess}, textBlocks=${ocrResult.textBlocks.size}, fullTextLength=${ocrResult.fullText.length}")
+                            
+                            // 更新 UI
+                            runOnUiThread {
+                                val message = if (filePath != null) {
+                                    "截图已保存: $filePath\n" +
+                                    if (ocrResult.isSuccess) {
+                                        "OCR识别成功: 识别到 ${ocrResult.textBlocks.size} 个文本块\n" +
+                                        "识别文字: ${ocrResult.fullText.take(100)}${if (ocrResult.fullText.length > 100) "..." else ""}"
+                                    } else {
+                                        val recognizerType = recognizer.javaClass.simpleName
+                                        when (recognizerType) {
+                                            "PaddleOcrRecognizer" -> {
+                                                "OCR识别失败: PaddleOCR尚未集成\n（当前为占位实现，需要集成PaddleOCR库）"
+                                            }
+                                            "MlKitOcrRecognizer" -> {
+                                                "OCR识别失败: ML Kit需要Google Play Store\n（HarmonyOS设备未安装，需要集成PaddleOCR）\n\n解决方案：\n1. 安装Google Play Store（可能不可用）\n2. 集成PaddleOCR（推荐，完全离线）"
+                                            }
+                                            else -> {
+                                                "OCR识别失败或未识别到文字"
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    "截图保存失败"
+                                }
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    message,
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                
+                                // 更新OCR结果到UI
+                                onOcrResultUpdate?.invoke(ocrResult)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "OCR识别异常", e)
+                            runOnUiThread {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    if (filePath != null) "截图已保存: $filePath\nOCR识别异常: ${e.message}" else "截图保存失败",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                } ?: runOnUiThread {
                     Toast.makeText(
                         this,
                         if (filePath != null) "截图已保存: $filePath" else "截图保存失败",
@@ -332,7 +416,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     onCaptureClick: () -> Unit,
-    onOpenAccessibilitySettings: () -> Unit
+    onOpenAccessibilitySettings: () -> Unit,
+    ocrResult: OcrResult? = null,
+    onOcrResultChange: (OcrResult?) -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
@@ -387,12 +473,14 @@ fun MainScreen(
                 swipeLeftCount = swipeLeftCount,
                 swipeRightCount = swipeRightCount,
                 lastOperation = lastOperation,
+                ocrResult = ocrResult,
                 onClickCountChange = { clickCount = it },
                 onSwipeUpCountChange = { swipeUpCount = it },
                 onSwipeDownCountChange = { swipeDownCount = it },
                 onSwipeLeftCountChange = { swipeLeftCount = it },
                 onSwipeRightCountChange = { swipeRightCount = it },
-                onLastOperationChange = { lastOperation = it }
+                onLastOperationChange = { lastOperation = it },
+                onOcrResultChange = onOcrResultChange
             )
             2 -> RightPage()  // 右侧空白页
         }
@@ -415,12 +503,14 @@ fun MainContentPage(
     swipeLeftCount: Int,
     swipeRightCount: Int,
     lastOperation: String?,
+    ocrResult: OcrResult? = null,
     onClickCountChange: (Int) -> Unit,
     onSwipeUpCountChange: (Int) -> Unit,
     onSwipeDownCountChange: (Int) -> Unit,
     onSwipeLeftCountChange: (Int) -> Unit,
     onSwipeRightCountChange: (Int) -> Unit,
-    onLastOperationChange: (String?) -> Unit
+    onLastOperationChange: (String?) -> Unit,
+    onOcrResultChange: (OcrResult?) -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scrollState = rememberScrollState()
@@ -552,6 +642,116 @@ fun MainContentPage(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("捕获屏幕")
+                }
+            }
+        }
+        
+        // OCR识别结果
+        if (ocrResult != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (ocrResult.isSuccess) 
+                        MaterialTheme.colorScheme.primaryContainer 
+                    else 
+                        MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "OCR识别结果",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        TextButton(
+                            onClick = { onOcrResultChange(null) }
+                        ) {
+                            Text("清除")
+                        }
+                    }
+                    
+                    if (ocrResult.isSuccess) {
+                        Text(
+                            text = "✅ 识别成功",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "识别到 ${ocrResult.textBlocks.size} 个文本块",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        // 显示完整文字（可滚动）
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .padding(12.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                Text(
+                                    text = ocrResult.fullText,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                        
+                        // 显示文本块列表（前5个）
+                        if (ocrResult.textBlocks.isNotEmpty()) {
+                            Text(
+                                text = "文本块详情：",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            ocrResult.textBlocks.take(5).forEachIndexed { index, block ->
+                                Card(
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${index + 1}. ${block.text}",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                        Text(
+                                            text = "位置: (${block.boundingBox.left}, ${block.boundingBox.top}) - (${block.boundingBox.right}, ${block.boundingBox.bottom})",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            if (ocrResult.textBlocks.size > 5) {
+                                Text(
+                                    text = "... 还有 ${ocrResult.textBlocks.size - 5} 个文本块",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "❌ 识别失败或未识别到文字",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
         }

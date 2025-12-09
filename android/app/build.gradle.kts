@@ -52,6 +52,12 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     // HorizontalPager for swipe testing
     implementation("androidx.compose.foundation:foundation:1.7.1")
+    
+    // ML Kit Text Recognition (OCR)
+    implementation("com.google.mlkit:text-recognition:16.0.0")
+    // 中文支持
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
