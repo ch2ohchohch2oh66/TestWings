@@ -20,6 +20,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // 配置 APK 输出文件名，包含版本号和时间戳，避免覆盖
+    applicationVariants.all {
+        val variant = this
+        variant.outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val buildType = variant.buildType.name
+            val versionName = variant.versionName
+            val versionCode = variant.versionCode
+            val timestamp = System.currentTimeMillis() / 1000 // 秒级时间戳
+            output.outputFileName = "TestWings-${buildType}-v${versionName}-${versionCode}-${timestamp}.apk"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

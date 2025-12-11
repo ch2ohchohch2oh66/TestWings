@@ -54,6 +54,7 @@ import com.testwings.utils.GooglePlayServicesChecker
 import com.testwings.utils.OcrRecognizerFactory
 import com.testwings.utils.OcrResult
 import com.testwings.utils.ScreenCapture
+import com.testwings.ui.TestCaseManagerSection
 
 class MainActivity : ComponentActivity() {
     private lateinit var mediaProjectionManager: MediaProjectionManager
@@ -67,6 +68,13 @@ class MainActivity : ComponentActivity() {
     // OCR结果状态（用于传递给Compose UI）
     private var ocrResultState: OcrResult? = null
     private var onOcrResultUpdate: ((OcrResult?) -> Unit)? = null
+    
+    // 用于测试用例执行的OCR结果等待
+    private var pendingOcrResult: OcrResult? = null
+    private var ocrResultReady: Boolean = false
+    
+    // 防止重复处理图像的标志
+    private var isCapturing: Boolean = false
     
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -256,6 +264,21 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun captureScreen() {
+        // 如果正在截图，忽略新的截图请求
+        if (isCapturing) {
+            Log.d("MainActivity", "正在截图，忽略重复请求")
+            return
+        }
+        
+        // 清理之前的资源
+        virtualDisplay?.release()
+        virtualDisplay = null
+        imageReader?.close()
+        imageReader = null
+        
+        // 设置截图标志
+        isCapturing = true
+        
         val metrics = DisplayMetrics()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+ 使用 WindowMetrics（但为了兼容性，仍使用 getRealMetrics）
@@ -269,7 +292,8 @@ class MainActivity : ComponentActivity() {
         val height = metrics.heightPixels
         val density = metrics.densityDpi
         
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        // 将 buffer 改为 1，只缓存1帧图像，避免多帧导致多张截图
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 1)
         
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture",
@@ -279,8 +303,16 @@ class MainActivity : ComponentActivity() {
         )
         
         imageReader?.setOnImageAvailableListener({ reader ->
+            // 如果已经处理过图像，忽略后续的图像（防止多帧导致多张截图）
+            if (!isCapturing) {
+                Log.d("MainActivity", "已处理过图像，忽略后续图像")
+                return@setOnImageAvailableListener
+            }
+            
             val image = reader.acquireLatestImage()
             if (image != null) {
+                // 立即设置标志为 false，防止重复处理
+                isCapturing = false
                 val bitmap = imageToBitmap(image)
                 image.close()
                 
@@ -295,6 +327,12 @@ class MainActivity : ComponentActivity() {
                             val ocrResult = recognizer.recognize(bitmap)
                             
                             Log.d("MainActivity", "OCR识别完成，结果: isSuccess=${ocrResult.isSuccess}, textBlocks=${ocrResult.textBlocks.size}, fullTextLength=${ocrResult.fullText.length}")
+                            
+                            // 更新用于测试用例执行的OCR结果
+                            synchronized(this@MainActivity) {
+                                pendingOcrResult = ocrResult
+                                ocrResultReady = true
+                            }
                             
                             // 更新 UI
                             runOnUiThread {
@@ -331,6 +369,11 @@ class MainActivity : ComponentActivity() {
                             }
                         } catch (e: Exception) {
                             Log.e("MainActivity", "OCR识别异常", e)
+                            // 标记OCR失败
+                            synchronized(this@MainActivity) {
+                                pendingOcrResult = null
+                                ocrResultReady = true
+                            }
                             runOnUiThread {
                                 Toast.makeText(
                                     this@MainActivity,
@@ -341,6 +384,11 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } ?: runOnUiThread {
+                    // 没有OCR识别器，标记为完成但结果为空
+                    synchronized(this@MainActivity) {
+                        pendingOcrResult = null
+                        ocrResultReady = true
+                    }
                     Toast.makeText(
                         this,
                         if (filePath != null) "截图已保存: $filePath" else "截图保存失败",
@@ -362,6 +410,9 @@ class MainActivity : ComponentActivity() {
                     val serviceIntent = Intent(applicationContext, ScreenCaptureService::class.java)
                     applicationContext.stopService(serviceIntent)
                 }
+            } else {
+                // 图像为 null，重置标志
+                isCapturing = false
             }
         }, null)
     }
@@ -380,6 +431,51 @@ class MainActivity : ComponentActivity() {
         )
         bitmap.copyPixelsFromBuffer(buffer)
         return Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
+    }
+    
+    /**
+     * 触发截图并等待OCR结果（用于测试用例执行）
+     * 这是一个 suspend 函数，会等待OCR识别完成
+     */
+    suspend fun triggerScreenshotAndWaitForOcr(): OcrResult? {
+        // 重置状态
+        synchronized(this) {
+            pendingOcrResult = null
+            ocrResultReady = false
+        }
+        
+        // 如果已经有有效的 MediaProjection 实例，直接使用
+        if (mediaProjection != null) {
+            try {
+                // 触发截图（异步）
+                captureScreen()
+            } catch (e: Exception) {
+                // 如果 MediaProjection 已失效，需要重新获取
+                mediaProjection = null
+                Log.d("MainActivity", "MediaProjection 已失效，需要重新授权")
+                return null
+            }
+        } else {
+            // 没有 MediaProjection，无法截图
+            Log.w("MainActivity", "MediaProjection 未初始化，无法截图")
+            return null
+        }
+        
+        // 等待OCR结果（最多等待10秒）
+        var retryCount = 0
+        val maxRetries = 20 // 20 * 500ms = 10秒
+        while (!ocrResultReady && retryCount < maxRetries) {
+            kotlinx.coroutines.delay(500)
+            retryCount++
+        }
+        
+        // 获取OCR结果
+        synchronized(this) {
+            val result = pendingOcrResult
+            pendingOcrResult = null
+            ocrResultReady = false
+            return result
+        }
     }
     
     /**
@@ -755,6 +851,22 @@ fun MainContentPage(
                 }
             }
         }
+        
+        // 测试用例执行功能
+        val mainActivity = context as? MainActivity
+        TestCaseManagerSection(
+            ocrResult = ocrResult,
+            onExecutionComplete = { result ->
+                android.widget.Toast.makeText(
+                    context,
+                    if (result.success) "测试用例执行成功" else "测试用例执行失败",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            },
+            triggerScreenshotAndWaitForOcr = mainActivity?.let { activity ->
+                { activity.triggerScreenshotAndWaitForOcr() }
+            }
+        )
         
         // 操作测试功能（需要无障碍服务）
         if (isAccessibilityEnabled) {

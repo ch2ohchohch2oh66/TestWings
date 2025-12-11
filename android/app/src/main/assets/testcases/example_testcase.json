@@ -1,0 +1,66 @@
+{
+  "name": "示例测试用例",
+  "description": "这是一个示例测试用例，演示如何使用TestWings执行自动化测试",
+  "steps": [
+    {
+      "description": "点击屏幕中心",
+      "action": {
+        "type": "click",
+        "locateBy": "COORDINATE",
+        "value": "540,960"
+      },
+      "waitAfter": 1000
+    },
+    {
+      "description": "向上滑动",
+      "action": {
+        "type": "swipe",
+        "direction": "UP",
+        "distance": 500
+      },
+      "waitAfter": 1000
+    },
+    {
+      "description": "向下滑动",
+      "action": {
+        "type": "swipe",
+        "direction": "DOWN",
+        "distance": 500
+      },
+      "waitAfter": 1000
+    },
+    {
+      "description": "验证屏幕上是否包含'捕获屏幕'文字",
+      "action": {
+        "type": "screenshot"
+      },
+      "waitAfter": 1000,
+      "verification": {
+        "type": "TEXT_EXISTS",
+        "value": "捕获屏幕",
+        "required": false
+      }
+    },
+    {
+      "description": "验证屏幕上是否包含'自动化测试'文字",
+      "action": {
+        "type": "screenshot"
+      },
+      "waitAfter": 1000,
+      "verification": {
+        "type": "TEXT_EXISTS",
+        "value": "自动化测试",
+        "required": false
+      }
+    },
+    {
+      "description": "按返回键",
+      "action": {
+        "type": "key",
+        "keyType": "BACK"
+      },
+      "waitAfter": 1000
+    }
+  ]
+}
+
