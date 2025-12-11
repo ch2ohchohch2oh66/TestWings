@@ -6,6 +6,7 @@ import android.util.Log
 import com.testwings.utils.DeviceController
 import com.testwings.utils.OcrResult
 import com.testwings.utils.ScreenCapture
+import com.testwings.utils.SemanticMatcher
 import kotlinx.coroutines.delay
 
 /**
@@ -270,12 +271,13 @@ class TestExecutor(
     /**
      * 执行点击操作
      */
-    private fun executeClick(
+    private suspend fun executeClick(
         action: Action.Click,
         getOcrResult: (() -> OcrResult?)? = null
     ): ActionResult {
         val ocrResult = getOcrResult?.invoke()
-        val locateResult = ElementLocator.locate(action.locateBy, action.value, ocrResult)
+        // 使用异步定位，支持语义匹配
+        val locateResult = ElementLocator.locateAsync(action.locateBy, action.value, ocrResult, useSemanticMatch = true)
         
         return if (locateResult.success && locateResult.point != null) {
             val success = DeviceController.click(locateResult.point.x, locateResult.point.y)
@@ -313,7 +315,8 @@ class TestExecutor(
             else -> {
                 // 对于TEXT和COORDINATE定位，先定位到输入框，然后点击，再输入
                 val ocrResult = getOcrResult?.invoke()
-                val locateResult = ElementLocator.locate(action.locateBy, action.locateValue, ocrResult)
+                // 使用异步定位，支持语义匹配
+                val locateResult = ElementLocator.locateAsync(action.locateBy, action.locateValue, ocrResult, useSemanticMatch = true)
                 
                 if (locateResult.success && locateResult.point != null) {
                     // 先点击输入框
@@ -394,7 +397,7 @@ class TestExecutor(
     /**
      * 验证操作结果
      */
-    private fun verify(
+    private suspend fun verify(
         verification: Verification,
         getOcrResult: (() -> OcrResult?)? = null
     ): VerificationResult {
@@ -415,21 +418,28 @@ class TestExecutor(
     }
     
     /**
-     * 验证文本存在（使用OCR）
+     * 验证文本存在（使用OCR + 语义匹配）
      */
-    private fun verifyTextExists(
+    private suspend fun verifyTextExists(
         text: String,
         getOcrResult: (() -> OcrResult?)? = null
     ): VerificationResult {
         val ocrResult = getOcrResult?.invoke()
         return if (ocrResult != null && ocrResult.isSuccess) {
-            val exists = ocrResult.fullText.contains(text, ignoreCase = true) ||
-                ocrResult.textBlocks.any { it.text.contains(text, ignoreCase = true) }
+            // 使用语义匹配器进行智能匹配
+            val matchResult = SemanticMatcher.matchText(text, ocrResult, useSemanticMatch = true)
             
-            if (exists) {
-                VerificationResult(passed = true, message = "文本 '$text' 存在")
+            if (matchResult.success) {
+                val matchTypeStr = when (matchResult.matchType) {
+                    SemanticMatcher.MatchType.DIRECT -> "直接匹配"
+                    SemanticMatcher.MatchType.SEMANTIC -> "语义匹配"
+                }
+                VerificationResult(
+                    passed = true,
+                    message = "文本 '$text' 存在（$matchTypeStr，置信度: ${matchResult.confidence}）"
+                )
             } else {
-                VerificationResult(passed = false, message = "文本 '$text' 不存在")
+                VerificationResult(passed = false, message = "文本 '$text' 不存在: ${matchResult.error}")
             }
         } else {
             VerificationResult(passed = false, message = "OCR识别结果不可用，无法验证")
@@ -437,21 +447,24 @@ class TestExecutor(
     }
     
     /**
-     * 验证文本不存在（使用OCR）
+     * 验证文本不存在（使用OCR + 语义匹配）
      */
-    private fun verifyTextNotExists(
+    private suspend fun verifyTextNotExists(
         text: String,
         getOcrResult: (() -> OcrResult?)? = null
     ): VerificationResult {
         val ocrResult = getOcrResult?.invoke()
         return if (ocrResult != null && ocrResult.isSuccess) {
-            val exists = ocrResult.fullText.contains(text, ignoreCase = true) ||
-                ocrResult.textBlocks.any { it.text.contains(text, ignoreCase = true) }
+            // 使用语义匹配器进行智能匹配
+            val matchResult = SemanticMatcher.matchText(text, ocrResult, useSemanticMatch = true)
             
-            if (!exists) {
+            if (!matchResult.success) {
                 VerificationResult(passed = true, message = "文本 '$text' 不存在（符合预期）")
             } else {
-                VerificationResult(passed = false, message = "文本 '$text' 存在（不符合预期）")
+                VerificationResult(
+                    passed = false,
+                    message = "文本 '$text' 存在（不符合预期，匹配到: '${matchResult.matchedBlock?.text}'）"
+                )
             }
         } else {
             VerificationResult(passed = false, message = "OCR识别结果不可用，无法验证")

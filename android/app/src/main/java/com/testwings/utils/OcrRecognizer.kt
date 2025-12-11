@@ -49,11 +49,23 @@ class MlKitOcrRecognizer(private val context: android.content.Context) : IOcrRec
     }
     
     override suspend fun recognize(bitmap: Bitmap): OcrResult = withContext(Dispatchers.IO) {
+        // 通用预处理方案：使用温和的图像增强（对比度增强 + 锐化）
+        // 这些预处理通常能提升OCR识别准确率，且不会破坏已经清晰的图像
+        // 原理：OCR模型通常在预处理过的图像上训练，适度的增强有助于识别
+        
+        var processedBitmap: Bitmap? = null
         try {
             Log.d(TAG, "开始OCR识别（ML Kit），图片尺寸: ${bitmap.width}x${bitmap.height}")
             
-            // 将Bitmap转换为InputImage
-            val image = InputImage.fromBitmap(bitmap, 0)
+            // 应用通用预处理：温和的对比度增强和锐化
+            processedBitmap = ImagePreprocessor.preprocess(
+                bitmap,
+                ImagePreprocessor.defaultConfig
+            )
+            
+            // 使用预处理后的图像进行识别
+            // 注意：InputImage.fromBitmap会复制bitmap数据，所以可以安全地回收processedBitmap
+            val image = InputImage.fromBitmap(processedBitmap, 0)
             
             // 使用suspendCancellableCoroutine将回调转换为协程
             suspendCancellableCoroutine { continuation ->
@@ -126,6 +138,11 @@ class MlKitOcrRecognizer(private val context: android.content.Context) : IOcrRec
                 fullText = "",
                 textBlocks = emptyList()
             )
+        } finally {
+            // 回收预处理后的bitmap（如果与原始bitmap不同）
+            if (processedBitmap != null && processedBitmap != bitmap && !processedBitmap.isRecycled) {
+                processedBitmap.recycle()
+            }
         }
     }
     
