@@ -55,6 +55,10 @@ htmlcov/
 temp/
 tmp/
 
+# Git diff output files (accidentally saved)
+how *
+diff *
+
 # Android Studio
 .idea/
 *.iml
