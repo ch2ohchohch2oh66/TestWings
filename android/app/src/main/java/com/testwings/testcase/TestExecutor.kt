@@ -6,6 +6,7 @@ import android.util.Log
 import com.testwings.utils.DeviceController
 import com.testwings.utils.OcrResult
 import com.testwings.utils.ScreenCapture
+import com.testwings.utils.ScreenState
 import com.testwings.utils.SemanticMatcher
 import kotlinx.coroutines.delay
 
@@ -105,13 +106,15 @@ class TestExecutor(
      * 执行测试用例
      * @param testCase 测试用例
      * @param onStepComplete 步骤完成回调（可选，用于UI更新）
-     * @param getOcrResult 获取当前OCR结果的函数（用于元素定位和验证）
+     * @param getScreenState 获取当前屏幕状态的函数（优先使用VL模型，用于元素定位和验证）
+     * @param getOcrResult 获取当前OCR结果的函数（降级方案，用于元素定位和验证）
      * @param triggerScreenshotAndWaitForOcr 触发截图和OCR识别的函数（用于截图操作），返回最新的OCR结果
      * @return 执行结果
      */
     suspend fun execute(
         testCase: TestCase,
         onStepComplete: ((StepResult) -> Unit)? = null,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null,
         triggerScreenshotAndWaitForOcr: (suspend () -> OcrResult?)? = null
     ): ExecutionResult {
@@ -128,10 +131,11 @@ class TestExecutor(
                 val stepStartTime = System.currentTimeMillis()
                 
                 // 执行操作（如果是截图操作，executeAction 已经处理了截图和OCR，并返回了OCR结果）
-                val actionResult = executeAction(step.action, getOcrResult, triggerScreenshotAndWaitForOcr)
+                val actionResult = executeAction(step.action, getScreenState, getOcrResult, triggerScreenshotAndWaitForOcr)
                 
-                // 获取OCR结果用于验证
+                // 获取屏幕状态和OCR结果用于验证
                 // 如果是截图操作，executeAction 已经返回了OCR结果
+                val currentScreenState = getScreenState?.invoke()
                 currentStepOcrResult = if (step.action is Action.Screenshot) {
                     // 截图操作，使用 executeAction 返回的OCR结果
                     actionResult.ocrResult
@@ -147,7 +151,11 @@ class TestExecutor(
                 
                 // 执行验证（如果有）
                 val verificationResult = step.verification?.let { verification ->
-                    verify(verification) { currentStepOcrResult }
+                    verify(
+                        verification,
+                        getScreenState = { currentScreenState },
+                        getOcrResult = { currentStepOcrResult }
+                    )
                 }
                 
                 // 如果验证失败且是必需的，标记步骤为失败
@@ -219,16 +227,17 @@ class TestExecutor(
      */
     private suspend fun executeAction(
         action: Action,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null,
         triggerScreenshotAndWaitForOcr: (suspend () -> OcrResult?)? = null
     ): ActionResultWithOcr {
         return when (action) {
             is Action.Click -> {
-                val result = executeClick(action, getOcrResult)
+                val result = executeClick(action, getScreenState, getOcrResult)
                 ActionResultWithOcr(success = result.success, error = result.error)
             }
             is Action.Input -> {
-                val result = executeInput(action, getOcrResult)
+                val result = executeInput(action, getScreenState, getOcrResult)
                 ActionResultWithOcr(success = result.success, error = result.error)
             }
             is Action.Swipe -> {
@@ -273,11 +282,13 @@ class TestExecutor(
      */
     private suspend fun executeClick(
         action: Action.Click,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null
     ): ActionResult {
+        val screenState = getScreenState?.invoke()
         val ocrResult = getOcrResult?.invoke()
-        // 使用异步定位，支持语义匹配
-        val locateResult = ElementLocator.locateAsync(action.locateBy, action.value, ocrResult, useSemanticMatch = true)
+        // 使用异步定位，优先使用VL模型，降级到OCR
+        val locateResult = ElementLocator.locateAsync(action.locateBy, action.value, screenState, ocrResult, useSemanticMatch = true)
         
         return if (locateResult.success && locateResult.point != null) {
             val success = DeviceController.click(locateResult.point.x, locateResult.point.y)
@@ -299,6 +310,7 @@ class TestExecutor(
      */
     private suspend fun executeInput(
         action: Action.Input,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null
     ): ActionResult {
         return when (action.locateBy) {
@@ -314,9 +326,10 @@ class TestExecutor(
             }
             else -> {
                 // 对于TEXT和COORDINATE定位，先定位到输入框，然后点击，再输入
+                val screenState = getScreenState?.invoke()
                 val ocrResult = getOcrResult?.invoke()
-                // 使用异步定位，支持语义匹配
-                val locateResult = ElementLocator.locateAsync(action.locateBy, action.locateValue, ocrResult, useSemanticMatch = true)
+                // 使用异步定位，优先使用VL模型，降级到OCR
+                val locateResult = ElementLocator.locateAsync(action.locateBy, action.locateValue, screenState, ocrResult, useSemanticMatch = true)
                 
                 if (locateResult.success && locateResult.point != null) {
                     // 先点击输入框
@@ -399,14 +412,15 @@ class TestExecutor(
      */
     private suspend fun verify(
         verification: Verification,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null
     ): VerificationResult {
         return when (verification.type) {
             VerificationType.TEXT_EXISTS -> {
-                verifyTextExists(verification.value, getOcrResult)
+                verifyTextExists(verification.value, getScreenState, getOcrResult)
             }
             VerificationType.TEXT_NOT_EXISTS -> {
-                verifyTextNotExists(verification.value, getOcrResult)
+                verifyTextNotExists(verification.value, getScreenState, getOcrResult)
             }
             VerificationType.ELEMENT_EXISTS -> {
                 verifyElementExists(verification.value)
@@ -418,12 +432,26 @@ class TestExecutor(
     }
     
     /**
-     * 验证文本存在（使用OCR + 语义匹配）
+     * 验证文本存在（优先使用VL模型，降级到OCR + 语义匹配）
      */
     private suspend fun verifyTextExists(
         text: String,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null
     ): VerificationResult {
+        // 第一步：优先使用VL模型验证
+        val screenState = getScreenState?.invoke()
+        if (screenState != null && screenState.vlAvailable && screenState.elements.isNotEmpty()) {
+            val matchedElement = screenState.findElementByText(text, useSemanticMatch = false)
+            if (matchedElement != null) {
+                return VerificationResult(
+                    passed = true,
+                    message = "文本 '$text' 存在（VL模型识别，置信度: ${matchedElement.confidence}）"
+                )
+            }
+        }
+        
+        // 第二步：降级到OCR验证
         val ocrResult = getOcrResult?.invoke()
         return if (ocrResult != null && ocrResult.isSuccess) {
             // 使用语义匹配器进行智能匹配
@@ -431,8 +459,8 @@ class TestExecutor(
             
             if (matchResult.success) {
                 val matchTypeStr = when (matchResult.matchType) {
-                    SemanticMatcher.MatchType.DIRECT -> "直接匹配"
-                    SemanticMatcher.MatchType.SEMANTIC -> "语义匹配"
+                    SemanticMatcher.MatchType.DIRECT -> "OCR直接匹配"
+                    SemanticMatcher.MatchType.SEMANTIC -> "OCR语义匹配"
                 }
                 VerificationResult(
                     passed = true,
@@ -442,17 +470,36 @@ class TestExecutor(
                 VerificationResult(passed = false, message = "文本 '$text' 不存在: ${matchResult.error}")
             }
         } else {
-            VerificationResult(passed = false, message = "OCR识别结果不可用，无法验证")
+            VerificationResult(passed = false, message = "VL和OCR识别结果都不可用，无法验证")
         }
     }
     
     /**
-     * 验证文本不存在（使用OCR + 语义匹配）
+     * 验证文本不存在（优先使用VL模型，降级到OCR + 语义匹配）
      */
     private suspend fun verifyTextNotExists(
         text: String,
+        getScreenState: (() -> ScreenState?)? = null,
         getOcrResult: (() -> OcrResult?)? = null
     ): VerificationResult {
+        // 第一步：优先使用VL模型验证
+        val screenState = getScreenState?.invoke()
+        if (screenState != null && screenState.vlAvailable && screenState.elements.isNotEmpty()) {
+            val matchedElement = screenState.findElementByText(text, useSemanticMatch = false)
+            if (matchedElement == null) {
+                return VerificationResult(
+                    passed = true,
+                    message = "文本 '$text' 不存在（符合预期，VL模型验证）"
+                )
+            } else {
+                return VerificationResult(
+                    passed = false,
+                    message = "文本 '$text' 存在（不符合预期，VL模型识别到: '${matchedElement.text}'）"
+                )
+            }
+        }
+        
+        // 第二步：降级到OCR验证
         val ocrResult = getOcrResult?.invoke()
         return if (ocrResult != null && ocrResult.isSuccess) {
             // 使用语义匹配器进行智能匹配
@@ -467,7 +514,7 @@ class TestExecutor(
                 )
             }
         } else {
-            VerificationResult(passed = false, message = "OCR识别结果不可用，无法验证")
+            VerificationResult(passed = false, message = "VL和OCR识别结果都不可用，无法验证")
         }
     }
     

@@ -81,3 +81,11 @@ release/
 .gradle/
 gradle-app.setting
 !gradle-wrapper.jar
+
+# AI Model files (too large for Git)
+android/app/src/main/assets/models/vl/*.onnx
+android/app/src/main/assets/models/vl/*.bin
+android/app/src/main/assets/models/vl/*.safetensors
+# Keep README and .gitkeep
+!android/app/src/main/assets/models/vl/README.md
+!android/app/src/main/assets/models/vl/.gitkeep

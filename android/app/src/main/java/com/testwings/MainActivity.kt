@@ -54,6 +54,7 @@ import com.testwings.utils.GooglePlayServicesChecker
 import com.testwings.utils.OcrRecognizerFactory
 import com.testwings.utils.OcrResult
 import com.testwings.utils.ScreenCapture
+import com.testwings.utils.VisionLanguageManager
 import com.testwings.ui.TestCaseManagerSection
 
 class MainActivity : ComponentActivity() {
@@ -63,6 +64,7 @@ class MainActivity : ComponentActivity() {
     private var virtualDisplay: VirtualDisplay? = null
     private var screenCapture: ScreenCapture? = null
     private var ocrRecognizer: com.testwings.utils.IOcrRecognizer? = null
+    private var visionLanguageManager: VisionLanguageManager? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     
     // OCR结果状态（用于传递给Compose UI）
@@ -189,6 +191,30 @@ class MainActivity : ComponentActivity() {
         mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         screenCapture = ScreenCapture(this)
         ocrRecognizer = OcrRecognizerFactory.create(this)
+        
+        // 初始化Vision-Language模型管理器
+        visionLanguageManager = VisionLanguageManager(this)
+        
+        // 检查模型文件是否存在，并尝试加载（用于测试）
+        coroutineScope.launch {
+            val isAvailable = visionLanguageManager?.isModelAvailable() ?: false
+            if (isAvailable) {
+                Log.d("MainActivity", "VL模型文件已就绪，开始测试加载...")
+                // 测试加载模型，查看模型结构信息
+                val loaded = visionLanguageManager?.loadModel { progress ->
+                    Log.d("MainActivity", "模型加载进度: $progress%")
+                } ?: false
+                if (loaded) {
+                    Log.d("MainActivity", "✅ VL模型加载成功！可以查看日志了解模型结构")
+                    // 测试 vision_encoder 推理（使用一张测试截图）
+                    testVisionEncoderInference()
+                } else {
+                    Log.e("MainActivity", "❌ VL模型加载失败，请检查日志")
+                }
+            } else {
+                Log.w("MainActivity", "VL模型文件不存在，将使用OCR作为降级方案")
+            }
+        }
         
         setContent {
             TestWingsTheme {
@@ -332,6 +358,18 @@ class MainActivity : ComponentActivity() {
                             synchronized(this@MainActivity) {
                                 pendingOcrResult = ocrResult
                                 ocrResultReady = true
+                            }
+                            
+                            // 测试VL模型推理（如果模型已加载）
+                            visionLanguageManager?.let { vlm ->
+                                try {
+                                    Log.d("MainActivity", "🧪 开始测试VL模型推理（使用实际截图）...")
+                                    val screenState = vlm.understand(bitmap)
+                                    Log.d("MainActivity", "✅ VL模型推理完成: vlAvailable=${screenState.vlAvailable}, elements=${screenState.elements.size}")
+                                } catch (e: Exception) {
+                                    Log.e("MainActivity", "❌ VL模型推理测试失败", e)
+                                    e.printStackTrace()
+                                }
                             }
                             
                             // 更新 UI
@@ -499,6 +537,75 @@ class MainActivity : ComponentActivity() {
         // 当Activity恢复时（例如从设置页面返回），刷新无障碍服务状态
         // 这会触发Compose重新检查状态
         // 注意：这里不需要手动刷新，因为MainScreen中的LaunchedEffect会在Activity恢复时重新执行
+    }
+    
+    /**
+     * 测试 vision_encoder 推理功能
+     * 在模型加载成功后自动调用，验证输入格式和输出是否正确
+     */
+    private fun testVisionEncoderInference() {
+        coroutineScope.launch {
+            try {
+                Log.d("MainActivity", "🧪 开始测试 vision_encoder 推理功能...")
+                
+                // 如果已经有截图，使用最新的截图；否则创建一个测试图像
+                val testBitmap = if (ocrResultState != null && screenCapture != null) {
+                    // 尝试从保存的截图中加载（如果有的话）
+                    // 这里先创建一个简单的测试图像
+                    createTestBitmap()
+                } else {
+                    // 创建一个简单的测试图像（960x960，黑色背景）
+                    createTestBitmap()
+                }
+                
+                Log.d("MainActivity", "创建测试图像: ${testBitmap.width}x${testBitmap.height}")
+                
+                // 调用 understand 方法，这会触发 vision_encoder 推理
+                val screenState = visionLanguageManager?.understand(testBitmap)
+                
+                if (screenState != null) {
+                    Log.d("MainActivity", "✅ vision_encoder 推理测试成功！")
+                    Log.d("MainActivity", "   输出状态: vlAvailable=${screenState.vlAvailable}")
+                    Log.d("MainActivity", "   元素数量: ${screenState.elements.size}")
+                } else {
+                    Log.e("MainActivity", "❌ vision_encoder 推理测试失败：返回结果为空")
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "❌ vision_encoder 推理测试异常", e)
+                e.printStackTrace()
+            }
+        }
+    }
+    
+    /**
+     * 创建一个测试用的 Bitmap（960x960，用于测试 vision_encoder）
+     */
+    private fun createTestBitmap(): Bitmap {
+        val width = 960
+        val height = 960
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        
+        // 填充为黑色背景
+        bitmap.eraseColor(android.graphics.Color.BLACK)
+        
+        // 在中心绘制一个白色矩形（用于测试）
+        val canvas = android.graphics.Canvas(bitmap)
+        val paint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            style = android.graphics.Paint.Style.FILL
+        }
+        val rectSize = 200
+        val left = (width - rectSize) / 2
+        val top = (height - rectSize) / 2
+        canvas.drawRect(
+            left.toFloat(),
+            top.toFloat(),
+            (left + rectSize).toFloat(),
+            (top + rectSize).toFloat(),
+            paint
+        )
+        
+        return bitmap
     }
     
     override fun onDestroy() {

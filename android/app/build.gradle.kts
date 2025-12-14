@@ -71,6 +71,9 @@ dependencies {
     // 中文支持
     implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
     
+    // ONNX Runtime (for Vision-Language model inference)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
