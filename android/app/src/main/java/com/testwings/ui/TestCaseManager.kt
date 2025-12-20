@@ -91,8 +91,21 @@ fun TestCaseManagerSection(
                             selectedTestCase = testCase
                             isExecuting = true
                             executionResult = null
-                            coroutineScope.launch {
-                                executeTestCase(context, testCase, ocrResult, triggerScreenshotAndWaitForOcr) { result ->
+                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                val executor = TestExecutor(context)
+                                val result = executor.execute(
+                                    testCase = testCase,
+                                    onStepComplete = { stepResult ->
+                                        Log.d("TestCaseManager", "步骤 ${stepResult.stepNumber} 完成: ${stepResult.description}, 成功: ${stepResult.success}")
+                                    },
+                                    getScreenState = if (context is com.testwings.MainActivity) {
+                                        { context.getScreenState() }
+                                    } else null,
+                                    getOcrResult = { ocrResult },
+                                    triggerScreenshotAndWaitForOcr = triggerScreenshotAndWaitForOcr
+                                )
+                                // UI更新必须在主线程
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                     executionResult = result
                                     isExecuting = false
                                     onExecutionComplete?.invoke(result)
@@ -110,8 +123,21 @@ fun TestCaseManagerSection(
                         if (!isExecuting && selectedTestCase != null) {
                             isExecuting = true
                             executionResult = null
-                            coroutineScope.launch {
-                                executeTestCase(context, selectedTestCase!!, ocrResult, triggerScreenshotAndWaitForOcr) { result ->
+                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                val executor = TestExecutor(context)
+                                val result = executor.execute(
+                                    testCase = selectedTestCase!!,
+                                    onStepComplete = { stepResult ->
+                                        Log.d("TestCaseManager", "步骤 ${stepResult.stepNumber} 完成: ${stepResult.description}, 成功: ${stepResult.success}")
+                                    },
+                                    getScreenState = if (context is com.testwings.MainActivity) {
+                                        { context.getScreenState() }
+                                    } else null,
+                                    getOcrResult = { ocrResult },
+                                    triggerScreenshotAndWaitForOcr = triggerScreenshotAndWaitForOcr
+                                )
+                                // UI更新必须在主线程
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                     executionResult = result
                                     isExecuting = false
                                     onExecutionComplete?.invoke(result)
@@ -402,11 +428,19 @@ private suspend fun executeTestCase(
         { ocrResult }
     }
     
+    // 提供 getScreenState 函数（优先使用VL模型，用于元素定位和验证）
+    val getScreenState: (() -> com.testwings.utils.ScreenState?)? = if (context is com.testwings.MainActivity) {
+        { context.getScreenState() }
+    } else {
+        null
+    }
+    
     val result = executor.execute(
         testCase = testCase,
         onStepComplete = { stepResult ->
             Log.d("TestCaseManager", "步骤 ${stepResult.stepNumber} 完成: ${stepResult.description}, 成功: ${stepResult.success}")
         },
+        getScreenState = getScreenState,  // 传入VL模型识别结果
         getOcrResult = getOcrResult,
         triggerScreenshotAndWaitForOcr = triggerScreenshotAndWaitForOcr
     )

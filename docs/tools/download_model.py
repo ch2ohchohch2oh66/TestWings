@@ -5,21 +5,22 @@
 适用于huggingface-cli命令不可用的情况
 
 使用方法：
-    python download_model.py          # 下载Q4F16版本（解码器829MB + 视觉编码器1.27GB，推荐）⭐
+    python download_model.py          # 下载Q4F16版本（解码器869MB + 视觉编码器1.33GB + 文本嵌入467MB，推荐）⭐
     python download_model.py --q4f16 # 同上（Q4F16是唯一支持的版本）
 
 注意：INT8量化版本不支持（ONNX Runtime Android不支持ConvInteger操作符）
+注意：现在包含3个模型文件 + 3个配置文件，总共6个必需文件
 """
 
 import os
 from huggingface_hub import hf_hub_download
 
 def download_model(use_q4f16=False):
-    """
     下载模型必需文件到当前目录
     
     Args:
-        use_q4f16: 如果True，下载Q4F16版本（解码器829MB + 视觉编码器1.27GB）；否则也下载Q4F16版本（INT8不支持）
+        use_q4f16: 始终为True，下载Q4F16版本（解码器869MB + 视觉编码器1.33GB + 文本嵌入467MB）
+                   INT8版本不支持（ONNX Runtime Android不支持ConvInteger操作符）
     """
     repo_id = "onnx-community/Qwen2-VL-2B-Instruct"
     local_dir = "."
@@ -34,19 +35,17 @@ def download_model(use_q4f16=False):
     # 根据选择添加模型文件
     # 注意：INT8量化版本不支持（ONNX Runtime Android不支持ConvInteger操作符）
     # 因此只支持Q4F16版本
-    if use_q4f16:
-        decoder_file = "onnx/decoder_model_merged_q4f16.onnx"
-        vision_encoder_file = "onnx/vision_encoder_q4f16.onnx"
-        print("📦 下载Q4F16版本（解码器829MB + 视觉编码器1.27GB，推荐，兼容性最好）⭐")
-    else:
-        # 默认也使用Q4F16版本（INT8不支持）
-        decoder_file = "onnx/decoder_model_merged_q4f16.onnx"
-        vision_encoder_file = "onnx/vision_encoder_q4f16.onnx"
-        print("📦 下载Q4F16版本（解码器829MB + 视觉编码器1.27GB，推荐，兼容性最好）⭐")
+    decoder_file = "onnx/decoder_model_merged_q4f16.onnx"
+    vision_encoder_file = "onnx/vision_encoder_q4f16.onnx"
+    embed_tokens_file = "onnx/embed_tokens_q4f16.onnx"  # ⭐ 新增，必需
+    
+    if use_q4f16 or True:  # 始终使用Q4F16版本（INT8不支持）
+        print("📦 下载Q4F16版本（解码器869MB + 视觉编码器1.33GB + 文本嵌入467MB，推荐，兼容性最好）⭐")
         print("⚠️  注意：INT8量化版本不支持（ONNX Runtime Android不支持ConvInteger操作符）")
     
     required_files.append(decoder_file)
     required_files.append(vision_encoder_file)
+    required_files.append(embed_tokens_file)  # ⭐ 新增
     
     print(f"\n开始下载模型: {repo_id}")
     print(f"保存位置: {os.path.abspath(local_dir)}")

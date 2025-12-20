@@ -130,8 +130,36 @@ class TestExecutor(
                 Log.d(TAG, "执行步骤 ${step.stepNumber}: ${step.description}")
                 val stepStartTime = System.currentTimeMillis()
                 
-                // 执行操作（如果是截图操作，executeAction 已经处理了截图和OCR，并返回了OCR结果）
+                // 执行操作（如果是截图操作，executeAction 已经处理了截图和OCR/VL识别，并返回了OCR结果）
                 val actionResult = executeAction(step.action, getScreenState, getOcrResult, triggerScreenshotAndWaitForOcr)
+                
+                // 如果是截图操作，需要等待VL识别完成后再进行验证
+                // triggerScreenshotAndWaitForOcr 已经等待了VL识别完成（最多70秒）
+                if (step.action is Action.Screenshot && step.verification != null) {
+                    // 截图操作且有验证步骤，确保VL识别已完成
+                    // triggerScreenshotAndWaitForOcr 已经等待了VL识别完成，这里做短暂确认等待（最多5秒）
+                    var vlReadyRetry = 0
+                    val maxVlReadyRetries = 10 // 最多再等待5秒（作为保险，确保VL结果已更新）
+                    
+                    // 等待VL识别完成：screenState不为null且vlAvailable=true
+                    while (vlReadyRetry < maxVlReadyRetries) {
+                        val screenState = getScreenState?.invoke()
+                        if (screenState != null && screenState.vlAvailable) {
+                            // VL识别已完成
+                            Log.d(TAG, "VL识别已完成: vlAvailable=true, elements=${screenState.elements.size}")
+                            break
+                        }
+                        delay(500)
+                        vlReadyRetry++
+                    }
+                    
+                    val finalScreenState = getScreenState?.invoke()
+                    if (finalScreenState == null || !finalScreenState.vlAvailable) {
+                        Log.w(TAG, "VL识别未完成或失败，继续执行验证（将使用OCR降级方案）")
+                    } else if (finalScreenState.elements.isEmpty()) {
+                        Log.w(TAG, "VL识别完成但elements为空，使用OCR降级方案进行验证")
+                    }
+                }
                 
                 // 获取屏幕状态和OCR结果用于验证
                 // 如果是截图操作，executeAction 已经返回了OCR结果
@@ -150,11 +178,13 @@ class TestExecutor(
                 }
                 
                 // 执行验证（如果有）
+                // 注意：传入 getScreenState 函数引用以获取最新状态，而不是快照值
+                // OCR结果使用快照值即可，因为已经通过 executeAction 返回
                 val verificationResult = step.verification?.let { verification ->
                     verify(
                         verification,
-                        getScreenState = { currentScreenState },
-                        getOcrResult = { currentStepOcrResult }
+                        getScreenState = getScreenState,  // 传入函数引用，获取最新状态
+                        getOcrResult = { currentStepOcrResult }  // OCR结果使用快照（已通过executeAction返回）
                     )
                 }
                 
@@ -253,16 +283,17 @@ class TestExecutor(
                 ActionResultWithOcr(success = result.success, error = result.error)
             }
             is Action.Screenshot -> {
-                // 执行截图操作，触发实际的截图和OCR识别
+                // 执行截图操作，触发实际的截图和OCR/VL识别
+                // 注意：triggerScreenshotAndWaitForOcr 会等待OCR和VL识别完成（最多60秒）
                 if (triggerScreenshotAndWaitForOcr != null) {
-                    Log.d(TAG, "执行截图操作，触发截图和OCR识别...")
+                    Log.d(TAG, "执行截图操作，触发截图、OCR和VL识别...")
                     try {
                         val ocrResult = triggerScreenshotAndWaitForOcr()
                         if (ocrResult != null) {
-                            Log.d(TAG, "截图和OCR识别成功")
+                            Log.d(TAG, "截图和OCR识别成功，VL识别结果可通过 getScreenState() 获取")
                             ActionResultWithOcr(success = true, ocrResult = ocrResult)
                         } else {
-                            Log.w(TAG, "截图成功但OCR识别失败或超时")
+                            Log.w(TAG, "截图成功但OCR识别失败或超时，VL识别结果可通过 getScreenState() 获取")
                             ActionResultWithOcr(success = true) // 截图操作本身成功，OCR失败不影响
                         }
                     } catch (e: Exception) {
@@ -462,9 +493,17 @@ class TestExecutor(
                     SemanticMatcher.MatchType.DIRECT -> "OCR直接匹配"
                     SemanticMatcher.MatchType.SEMANTIC -> "OCR语义匹配"
                 }
+                // 如果VL识别已完成但elements为空，在消息中说明
+                val vlStatusStr = if (screenState != null && screenState.vlAvailable && screenState.elements.isEmpty()) {
+                    "（VL识别已完成但elements为空，使用OCR）"
+                } else if (screenState == null || !screenState.vlAvailable) {
+                    "（VL识别未完成，使用OCR）"
+                } else {
+                    ""
+                }
                 VerificationResult(
                     passed = true,
-                    message = "文本 '$text' 存在（$matchTypeStr，置信度: ${matchResult.confidence}）"
+                    message = "文本 '$text' 存在（$matchTypeStr$vlStatusStr，置信度: ${matchResult.confidence}）"
                 )
             } else {
                 VerificationResult(passed = false, message = "文本 '$text' 不存在: ${matchResult.error}")
@@ -505,12 +544,21 @@ class TestExecutor(
             // 使用语义匹配器进行智能匹配
             val matchResult = SemanticMatcher.matchText(text, ocrResult, useSemanticMatch = true)
             
+            // 如果VL识别已完成但elements为空，在消息中说明
+            val vlStatusStr = if (screenState != null && screenState.vlAvailable && screenState.elements.isEmpty()) {
+                "（VL识别已完成但elements为空，使用OCR）"
+            } else if (screenState == null || !screenState.vlAvailable) {
+                "（VL识别未完成，使用OCR）"
+            } else {
+                ""
+            }
+            
             if (!matchResult.success) {
-                VerificationResult(passed = true, message = "文本 '$text' 不存在（符合预期）")
+                VerificationResult(passed = true, message = "文本 '$text' 不存在（符合预期$vlStatusStr）")
             } else {
                 VerificationResult(
                     passed = false,
-                    message = "文本 '$text' 存在（不符合预期，匹配到: '${matchResult.matchedBlock?.text}'）"
+                    message = "文本 '$text' 存在（不符合预期$vlStatusStr，匹配到: '${matchResult.matchedBlock?.text}'）"
                 )
             }
         } else {

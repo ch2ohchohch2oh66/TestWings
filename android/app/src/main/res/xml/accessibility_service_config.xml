@@ -9,5 +9,6 @@
     android:canRetrieveWindowContent="true"
     android:canRequestTouchExplorationMode="true"
     android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
     android:settingsActivity="com.testwings.MainActivity" />
 

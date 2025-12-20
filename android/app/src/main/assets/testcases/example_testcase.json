@@ -40,26 +40,6 @@
         "value": "捕获屏幕",
         "required": false
       }
-    },
-    {
-      "description": "验证屏幕上是否包含'自动化测试'文字",
-      "action": {
-        "type": "screenshot"
-      },
-      "waitAfter": 1000,
-      "verification": {
-        "type": "TEXT_EXISTS",
-        "value": "自动化测试",
-        "required": false
-      }
-    },
-    {
-      "description": "按返回键",
-      "action": {
-        "type": "key",
-        "keyType": "BACK"
-      },
-      "waitAfter": 1000
     }
   ]
 }

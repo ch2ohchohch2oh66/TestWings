@@ -3,13 +3,23 @@ package com.testwings.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.ColorSpace
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.hardware.HardwareBuffer
+import android.hardware.display.DisplayManager
+import android.media.Image
+import android.media.ImageReader
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.RequiresApi
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * TestWings 无障碍服务
@@ -349,6 +359,120 @@ class TestWingsAccessibilityService : AccessibilityService() {
      */
     fun pressRecentApps(): Boolean {
         return performGlobalAction(GLOBAL_ACTION_RECENTS)
+    }
+    
+    /**
+     * 使用 AccessibilityService 捕获屏幕截图
+     * 注意：需要 Android Q (API 29) 或更高版本（因为需要使用 Bitmap.wrapHardwareBuffer）
+     * 
+     * @return Bitmap 截图，如果失败则返回 null
+     */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    fun takeScreenshot(): Bitmap? {
+        return try {
+            Log.d(TAG, "开始使用 AccessibilityService 捕获屏幕...")
+            
+            // 使用 CountDownLatch 等待异步回调
+            val latch = CountDownLatch(1)
+            var resultBitmap: Bitmap? = null
+            
+            // 调用 AccessibilityService 的 takeScreenshot 方法
+            var capturedErrorCode = 0
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, 
+                object : AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(screenshotResult: AccessibilityService.ScreenshotResult) {
+                        try {
+                            Log.d(TAG, "✅ AccessibilityService 截图成功")
+                            
+                            // 从 ScreenshotResult 获取 HardwareBuffer 和 ColorSpace
+                            val hardwareBuffer = screenshotResult.hardwareBuffer
+                            val colorSpace = screenshotResult.colorSpace
+                            
+                            if (hardwareBuffer != null && colorSpace != null) {
+                                try {
+                                    // 使用 Bitmap.wrapHardwareBuffer 直接创建 Bitmap
+                                    val bitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
+                                    if (bitmap != null) {
+                                        resultBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                        bitmap.recycle() // 回收 wrap 创建的 bitmap
+                                        Log.d(TAG, "截图 Bitmap 创建成功: ${resultBitmap?.width}x${resultBitmap?.height}")
+                                    } else {
+                                        Log.e(TAG, "Bitmap.wrapHardwareBuffer 返回 null")
+                                        capturedErrorCode = -1
+                                    }
+                                } finally {
+                                    // 关闭 HardwareBuffer 释放资源
+                                    hardwareBuffer.close()
+                                }
+                            } else {
+                                Log.e(TAG, "HardwareBuffer 或 ColorSpace 为 null")
+                                capturedErrorCode = -1
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "处理截图结果时异常", e)
+                            e.printStackTrace()
+                            capturedErrorCode = -1
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    
+                    override fun onFailure(failureErrorCode: Int) {
+                        Log.e(TAG, "❌ AccessibilityService 截图失败，错误代码: $failureErrorCode")
+                        capturedErrorCode = failureErrorCode
+                        latch.countDown()
+                    }
+                }
+            )
+            
+            // 等待截图完成（最多等待 5 秒）
+            val success = latch.await(5, TimeUnit.SECONDS)
+            if (!success) {
+                Log.e(TAG, "❌ AccessibilityService 截图超时（回调未触发）")
+                return null
+            }
+            
+            if (capturedErrorCode != 0) {
+                Log.e(TAG, "❌ AccessibilityService 截图失败，错误代码: $capturedErrorCode")
+                // 错误代码说明：
+                // 1 = ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS (需要启用无障碍服务)
+                // 2 = ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT (截图间隔太短，至少需要1秒)
+                // 3 = ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY (无效的显示)
+                // 4 = ERROR_TAKE_SCREENSHOT_INVALID_WINDOW (无效的窗口)
+                when (capturedErrorCode) {
+                    1 -> Log.e(TAG, "错误原因: 需要启用无障碍服务")
+                    2 -> Log.e(TAG, "错误原因: 截图间隔太短，需要等待至少1秒")
+                    3 -> Log.e(TAG, "错误原因: 无效的显示")
+                    4 -> Log.e(TAG, "错误原因: 无效的窗口")
+                    else -> Log.e(TAG, "错误原因: 未知错误代码")
+                }
+                return null
+            }
+            
+            if (resultBitmap == null && capturedErrorCode == 0) {
+                Log.e(TAG, "❌ AccessibilityService 截图回调成功，但 Bitmap 为 null")
+                return null
+            }
+            
+            resultBitmap
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ AccessibilityService 截图异常", e)
+            e.printStackTrace()
+            null
+        }
+    }
+    
+    /**
+     * 同步版本的截图方法
+     * 如果 Android 版本低于 Q (API 29)，返回 null
+     */
+    fun takeScreenshotSync(): Bitmap? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            takeScreenshot()
+        } else {
+            Log.w(TAG, "takeScreenshot 需要 Android Q (API 29) 或更高版本，当前版本: ${Build.VERSION.SDK_INT}")
+            null
+        }
     }
 }
 
