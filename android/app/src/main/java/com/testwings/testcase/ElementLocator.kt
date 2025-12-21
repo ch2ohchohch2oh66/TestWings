@@ -202,19 +202,41 @@ object ElementLocator {
             )
         }
         
-        // 使用语义匹配器进行智能匹配
-        val matchResult = SemanticMatcher.matchText(text, ocrResult, useSemanticMatch)
+        // 使用语义匹配器进行智能匹配（传入screenState以支持VL匹配）
+        val matchResult = SemanticMatcher.matchText(text, screenState, ocrResult, useSemanticMatch)
         
-        return if (matchResult.success && matchResult.matchedBlock != null) {
-            val matchTypeStr = when (matchResult.matchType) {
-                SemanticMatcher.MatchType.DIRECT -> "OCR直接匹配"
-                SemanticMatcher.MatchType.SEMANTIC -> "OCR语义匹配"
+        return if (matchResult.success) {
+            // 支持VL匹配和OCR匹配两种结果
+            val point: Point? = when {
+                matchResult.matchedElement != null -> {
+                    // VL模型匹配成功
+                    Point(matchResult.matchedElement.centerX, matchResult.matchedElement.centerY)
+                }
+                matchResult.matchedBlock != null -> {
+                    // OCR匹配成功
+                    Point(matchResult.matchedBlock.centerX, matchResult.matchedBlock.centerY)
+                }
+                else -> null
             }
-            Log.d(TAG, "根据文本 '$text' 定位成功（$matchTypeStr，置信度: ${matchResult.confidence}），位置: (${matchResult.matchedBlock.centerX}, ${matchResult.matchedBlock.centerY})")
-            LocateResult(
-                success = true,
-                point = Point(matchResult.matchedBlock.centerX, matchResult.matchedBlock.centerY)
-            )
+            
+            if (point != null) {
+                val matchTypeStr = when (matchResult.matchType) {
+                    SemanticMatcher.MatchType.DIRECT -> "OCR直接匹配"
+                    SemanticMatcher.MatchType.SEMANTIC -> "OCR语义匹配"
+                    SemanticMatcher.MatchType.VL -> "VL模型匹配"
+                }
+                Log.d(TAG, "根据文本 '$text' 定位成功（$matchTypeStr，置信度: ${matchResult.confidence}），位置: (${point.x}, ${point.y})")
+                LocateResult(
+                    success = true,
+                    point = point
+                )
+            } else {
+                Log.w(TAG, "匹配成功但无法获取坐标")
+                LocateResult(
+                    success = false,
+                    error = "匹配成功但无法获取坐标"
+                )
+            }
         } else {
             Log.w(TAG, "未找到匹配文本 '$text' 的元素: ${matchResult.error}")
             LocateResult(

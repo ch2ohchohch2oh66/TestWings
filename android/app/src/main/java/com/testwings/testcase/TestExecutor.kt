@@ -485,13 +485,14 @@ class TestExecutor(
         // 第二步：降级到OCR验证
         val ocrResult = getOcrResult?.invoke()
         return if (ocrResult != null && ocrResult.isSuccess) {
-            // 使用语义匹配器进行智能匹配
-            val matchResult = SemanticMatcher.matchText(text, ocrResult, useSemanticMatch = true)
+            // 使用语义匹配器进行智能匹配（传入screenState以支持VL匹配）
+            val matchResult = SemanticMatcher.matchText(text, screenState, ocrResult, useSemanticMatch = true)
             
             if (matchResult.success) {
                 val matchTypeStr = when (matchResult.matchType) {
                     SemanticMatcher.MatchType.DIRECT -> "OCR直接匹配"
                     SemanticMatcher.MatchType.SEMANTIC -> "OCR语义匹配"
+                    SemanticMatcher.MatchType.VL -> "VL模型匹配"
                 }
                 // 如果VL识别已完成但elements为空，在消息中说明
                 val vlStatusStr = if (screenState != null && screenState.vlAvailable && screenState.elements.isEmpty()) {
@@ -541,8 +542,8 @@ class TestExecutor(
         // 第二步：降级到OCR验证
         val ocrResult = getOcrResult?.invoke()
         return if (ocrResult != null && ocrResult.isSuccess) {
-            // 使用语义匹配器进行智能匹配
-            val matchResult = SemanticMatcher.matchText(text, ocrResult, useSemanticMatch = true)
+            // 使用语义匹配器进行智能匹配（传入screenState以支持VL匹配）
+            val matchResult = SemanticMatcher.matchText(text, screenState, ocrResult, useSemanticMatch = true)
             
             // 如果VL识别已完成但elements为空，在消息中说明
             val vlStatusStr = if (screenState != null && screenState.vlAvailable && screenState.elements.isEmpty()) {

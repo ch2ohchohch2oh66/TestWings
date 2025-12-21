@@ -1,8 +1,11 @@
 package com.testwings.utils
 
+import android.graphics.Point
 import android.util.Log
 import com.testwings.utils.OcrResult
+import com.testwings.utils.ScreenState
 import com.testwings.utils.TextBlock
+import com.testwings.utils.UIElement
 
 /**
  * 语义匹配器
@@ -27,9 +30,14 @@ object SemanticMatcher {
         val success: Boolean,
         
         /**
-         * 匹配到的文本块（如果成功）
+         * 匹配到的文本块（OCR匹配，如果成功）
          */
         val matchedBlock: TextBlock? = null,
+        
+        /**
+         * 匹配到的UI元素（VL匹配，如果成功）
+         */
+        val matchedElement: UIElement? = null,
         
         /**
          * 匹配置信度（0.0-1.0）
@@ -37,7 +45,7 @@ object SemanticMatcher {
         val confidence: Float = 0.0f,
         
         /**
-         * 匹配方式（DIRECT=直接匹配，SEMANTIC=语义匹配）
+         * 匹配方式（DIRECT=直接匹配，SEMANTIC=语义匹配，VL=VL模型匹配）
          */
         val matchType: MatchType = MatchType.DIRECT,
         
@@ -57,27 +65,57 @@ object SemanticMatcher {
         DIRECT,
         
         /**
-         * 语义匹配：使用大模型进行语义理解匹配
+         * 语义匹配：使用大模型进行语义理解匹配（OCR）
          */
-        SEMANTIC
+        SEMANTIC,
+        
+        /**
+         * VL模型匹配：使用Vision-Language模型进行语义匹配
+         */
+        VL
     }
     
     /**
      * 智能匹配文本
      * 
      * 策略：
-     * 1. 先尝试直接匹配（快速、准确）
-     * 2. 如果直接匹配失败，使用大模型进行语义匹配
+     * 1. 优先使用VL模型进行语义匹配（如果可用）
+     * 2. 如果VL不可用，使用OCR + 直接匹配
+     * 3. 如果直接匹配失败，使用大模型进行语义匹配
      * 
      * @param targetText 目标文本（来自测试用例）
-     * @param ocrResult OCR识别结果
+     * @param screenState 当前屏幕的VL识别结果（优先使用，可选）
+     * @param ocrResult OCR识别结果（降级方案，可选）
      * @param useSemanticMatch 是否启用语义匹配（默认true）
      * @return 匹配结果
      */
     suspend fun matchText(
         targetText: String,
-        ocrResult: OcrResult?,
+        screenState: ScreenState? = null,
+        ocrResult: OcrResult? = null,
         useSemanticMatch: Boolean = true
+    ): MatchResult {
+        // 第一步：优先使用VL模型进行语义匹配（如果可用）
+        if (screenState != null && screenState.vlAvailable && screenState.elements.isNotEmpty()) {
+            val vlResult = matchTextWithVL(targetText, screenState)
+            if (vlResult.success) {
+                Log.d(TAG, "VL模型语义匹配成功: '$targetText' -> '${vlResult.matchedElement?.text}' (置信度: ${vlResult.confidence})")
+                return vlResult
+            }
+            Log.d(TAG, "VL模型语义匹配失败，降级到OCR")
+        }
+        
+        // 第二步：降级到OCR匹配
+        return matchTextWithOCR(targetText, ocrResult, useSemanticMatch)
+    }
+    
+    /**
+     * 使用OCR进行文本匹配（原有逻辑）
+     */
+    private suspend fun matchTextWithOCR(
+        targetText: String,
+        ocrResult: OcrResult?,
+        useSemanticMatch: Boolean
     ): MatchResult {
         if (ocrResult == null || !ocrResult.isSuccess) {
             return MatchResult(
@@ -253,6 +291,64 @@ object SemanticMatcher {
         }
         
         return dp[m][n]
+    }
+    
+    /**
+     * 使用VL模型进行语义匹配
+     * 
+     * 策略：
+     * 1. 先尝试直接文本匹配（快速、准确）
+     * 2. 如果直接匹配失败，使用相似度算法进行语义匹配
+     * 
+     * @param targetText 目标文本
+     * @param screenState VL模型识别的屏幕状态
+     * @return 匹配结果
+     */
+    private fun matchTextWithVL(
+        targetText: String,
+        screenState: ScreenState
+    ): MatchResult {
+        // 第一步：尝试直接文本匹配
+        val directMatch = screenState.findElementByText(targetText, useSemanticMatch = false)
+        if (directMatch != null) {
+            return MatchResult(
+                success = true,
+                matchedElement = directMatch,
+                confidence = directMatch.confidence,
+                matchType = MatchType.VL
+            )
+        }
+        
+        // 第二步：使用相似度算法进行语义匹配
+        var bestMatch: UIElement? = null
+        var bestSimilarity = 0.0f
+        
+        for (element in screenState.elements) {
+            if (element.text.isNotEmpty()) {
+                val similarity = calculateSimilarity(targetText, element.text)
+                if (similarity > bestSimilarity) {
+                    bestSimilarity = similarity
+                    bestMatch = element
+                }
+            }
+        }
+        
+        // 如果相似度 > 0.6，认为匹配成功
+        if (bestMatch != null && bestSimilarity > 0.6f) {
+            // 综合置信度：相似度 * 元素置信度
+            val combinedConfidence = bestSimilarity * bestMatch.confidence
+            return MatchResult(
+                success = true,
+                matchedElement = bestMatch,
+                confidence = combinedConfidence,
+                matchType = MatchType.VL
+            )
+        }
+        
+        return MatchResult(
+            success = false,
+            error = "VL模型未找到语义相似的元素"
+        )
     }
     
     /**

@@ -57,7 +57,7 @@ import com.testwings.utils.OcrRecognizerFactory
 import com.testwings.utils.OcrResult
 import com.testwings.utils.ScreenCapture
 import com.testwings.utils.ScreenState
-import com.testwings.utils.VisionLanguageManager
+import com.testwings.utils.VisionLanguageServiceManager
 import com.testwings.ui.TestCaseManagerSection
 
 class MainActivity : ComponentActivity() {
@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
     // 这是系统安全限制，无法绕过
     private var screenCapture: ScreenCapture? = null
     private var ocrRecognizer: com.testwings.utils.IOcrRecognizer? = null
-    private var visionLanguageManager: VisionLanguageManager? = null
+    private var visionLanguageServiceManager: VisionLanguageServiceManager? = null
     private val coroutineScope = CoroutineScope(Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     
     // OCR结果状态（用于传递给Compose UI）
@@ -333,29 +333,37 @@ class MainActivity : ComponentActivity() {
         screenCapture = ScreenCapture(this)
         ocrRecognizer = OcrRecognizerFactory.create(this)
         
-        // 初始化Vision-Language模型管理器
-        visionLanguageManager = VisionLanguageManager(this)
+        // 初始化Vision-Language服务管理器（统一管理器）
+        visionLanguageServiceManager = VisionLanguageServiceManager(
+            context = this,
+            deploymentType = VisionLanguageServiceManager.DeploymentType.AUTO // 自动选择：优先本地，失败时降级到API
+        )
         
-        // 检查模型文件是否存在，并尝试加载（用于测试）
+        // 初始化服务（异步）
+        coroutineScope.launch {
+            visionLanguageServiceManager?.initialize()
+        }
+        
+        // 检查模型是否可用，并尝试加载（用于测试）
         // TODO: VL推理测试已OK，暂时注释掉，集中修复捕获屏幕权限问题
         /*
         coroutineScope.launch {
-            val isAvailable = visionLanguageManager?.isModelAvailable() ?: false
+            val isAvailable = visionLanguageServiceManager?.isModelAvailable() ?: false
             if (isAvailable) {
-                Log.d("MainActivity", "VL模型文件已就绪，开始测试加载...")
+                Log.d("MainActivity", "VL服务已就绪，开始测试加载...")
                 // 测试加载模型，查看模型结构信息
-                val loaded = visionLanguageManager?.loadModel { progress ->
+                val loaded = visionLanguageServiceManager?.loadModel { progress ->
                     Log.d("MainActivity", "模型加载进度: $progress%")
                 } ?: false
                 if (loaded) {
-                    Log.d("MainActivity", "✅ VL模型加载成功！可以查看日志了解模型结构")
+                    Log.d("MainActivity", "✅ VL服务加载成功！当前服务类型: ${visionLanguageServiceManager?.getCurrentServiceType()}")
                     // 测试 vision_encoder 推理（使用一张测试截图）
                     testVisionEncoderInference()
                 } else {
-                    Log.e("MainActivity", "❌ VL模型加载失败，请检查日志")
+                    Log.e("MainActivity", "❌ VL服务加载失败，请检查日志")
                 }
             } else {
-                Log.w("MainActivity", "VL模型文件不存在，将使用OCR作为降级方案")
+                Log.w("MainActivity", "VL服务不可用，将使用OCR作为降级方案")
             }
         }
         */
@@ -887,14 +895,14 @@ class MainActivity : ComponentActivity() {
                                 ocrResultReady = true
                             }
                             
-                            // 测试VL模型推理（如果模型已加载）
+                            // 测试VL模型推理（如果服务已初始化）
                             // TODO: VL推理测试已OK，暂时注释掉，集中修复捕获屏幕权限问题
                             /*
-                            visionLanguageManager?.let { vlm ->
+                            visionLanguageServiceManager?.let { vlm ->
                                 try {
                                     Log.d("MainActivity", "🧪 开始测试VL模型推理（使用实际截图）...")
                                     val screenState = vlm.understand(bitmap)
-                                    Log.d("MainActivity", "✅ VL模型推理完成: vlAvailable=${screenState.vlAvailable}, elements=${screenState.elements.size}")
+                                    Log.d("MainActivity", "✅ VL模型推理完成: vlAvailable=${screenState.vlAvailable}, elements=${screenState.elements.size}, serviceType=${vlm.getCurrentServiceType()}")
                                 } catch (e: Exception) {
                                     Log.e("MainActivity", "❌ VL模型推理测试失败", e)
                                     e.printStackTrace()
@@ -1289,7 +1297,7 @@ class MainActivity : ComponentActivity() {
                     }
                     
                     // 同时进行VL模型识别（用于元素定位和验证）
-                    visionLanguageManager?.let { vlm ->
+                    visionLanguageServiceManager?.let { vlm ->
                         coroutineScope.launch {
                             try {
                                 // 检查Activity是否还存在，如果已销毁则不执行
@@ -1551,7 +1559,7 @@ class MainActivity : ComponentActivity() {
                 Log.d("MainActivity", "创建测试图像: ${testBitmap.width}x${testBitmap.height}")
                 
                 // 调用 understand 方法，这会触发 vision_encoder 推理
-                val screenState = visionLanguageManager?.understand(testBitmap)
+                val screenState = visionLanguageServiceManager?.understand(testBitmap)
                 
                 if (screenState != null) {
                     Log.d("MainActivity", "✅ vision_encoder 推理测试成功！")
